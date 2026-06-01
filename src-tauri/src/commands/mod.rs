@@ -1,0 +1,9 @@
+pub mod categories;
+pub mod files;
+pub mod instances;
+pub mod launcher;
+pub mod mods;
+pub mod packs;
+pub mod scan;
+pub mod settings;
+pub mod updates;
