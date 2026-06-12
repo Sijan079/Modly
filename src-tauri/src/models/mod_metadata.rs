@@ -11,6 +11,7 @@ pub struct ModFile {
     pub file_path: String,
     pub enabled: bool,
     pub hash_sha256: Option<String>,
+    pub source_url: Option<String>,
     pub metadata: Option<ModMetadata>,
     #[serde(default)]
     pub categories: Vec<InstanceCategory>,
@@ -100,11 +101,58 @@ pub struct UpdateModMetadataInput {
     pub version: String,
     pub authors: Vec<String>,
     pub modrinth_url: Option<String>,
+    #[serde(default)]
+    pub source_url: Option<String>,
     pub loader: LoaderKind,
     pub mod_id_field: Option<String>,
     #[serde(default)]
     pub installed_modrinth_version_id: Option<String>,
     pub category_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModSuggestion {
+    pub id: String,
+    pub instance_id: String,
+    pub file_name: String,
+    pub file_path: String,
+    pub enabled: bool,
+    pub hash_sha256: Option<String>,
+    pub source_url: Option<String>,
+    pub metadata: Option<ModMetadata>,
+    #[serde(default)]
+    pub categories: Vec<InstanceCategory>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpsertModSuggestionInput {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub instance_id: String,
+    pub file_name: String,
+    #[serde(default)]
+    pub file_path: String,
+    #[serde(default = "default_suggestion_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub hash_sha256: Option<String>,
+    #[serde(default)]
+    pub source_url: Option<String>,
+    pub name: String,
+    pub version: String,
+    #[serde(default)]
+    pub authors: Vec<String>,
+    pub loader: LoaderKind,
+    #[serde(default)]
+    pub mod_id_field: Option<String>,
+    #[serde(default)]
+    pub category_ids: Vec<String>,
+}
+
+fn default_suggestion_enabled() -> bool {
+    true
 }
 
 /// Build a default Modrinth project URL from a mod slug/id.

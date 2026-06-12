@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { UpdateModMetadataInput } from "@/lib/types";
+import type { UpdateModMetadataInput, UpsertModSuggestionInput } from "@/lib/types";
 
 export function useMods(instanceId: string | null) {
   return useQuery({
@@ -54,6 +54,49 @@ export function useToggleMod() {
     }) => api.mods.toggle(instanceId, modId, enabled),
     onSuccess: (_, { instanceId }) => {
       qc.invalidateQueries({ queryKey: ["mods", instanceId] });
+    },
+  });
+}
+
+export function useModSuggestions(instanceId: string | null) {
+  return useQuery({
+    queryKey: ["mod-suggestions", instanceId],
+    queryFn: () => (instanceId ? api.mods.listSuggestions(instanceId) : []),
+    enabled: !!instanceId,
+  });
+}
+
+export function useUpsertModSuggestion() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: UpsertModSuggestionInput) => api.mods.upsertSuggestion(input),
+    onSuccess: (suggestion) => {
+      qc.invalidateQueries({ queryKey: ["mod-suggestions", suggestion.instanceId] });
+      qc.invalidateQueries({ queryKey: ["categories", suggestion.instanceId] });
+    },
+  });
+}
+
+export function useDeleteModSuggestion() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ instanceId: _instanceId, id }: { instanceId: string; id: string }) =>
+      api.mods.deleteSuggestion(id),
+    onSuccess: (_, { instanceId }) => {
+      qc.invalidateQueries({ queryKey: ["mod-suggestions", instanceId] });
+    },
+  });
+}
+
+export function useDeleteMod() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ instanceId: _instanceId, modId }: { instanceId: string; modId: string }) =>
+      api.mods.delete(modId),
+    onSuccess: (_, { instanceId }) => {
+      qc.invalidateQueries({ queryKey: ["mods", instanceId] });
+      qc.invalidateQueries({ queryKey: ["instances"] });
+      qc.invalidateQueries({ queryKey: ["mod-integrity-audit", instanceId] });
     },
   });
 }

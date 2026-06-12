@@ -5,6 +5,7 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import { DashboardPage } from "@/pages/Dashboard";
 import { InstancesPage } from "@/pages/Instances";
 import { ModsPage } from "@/pages/Mods";
+import { ModSuggestionsPage } from "@/pages/ModSuggestions";
 import { ResourcePacksPage } from "@/pages/ResourcePacks";
 import { UpdatesPage } from "@/pages/Updates";
 import { SettingsPage } from "@/pages/Settings";
@@ -31,6 +32,7 @@ export default function App() {
               <Route path="/" element={<DashboardPage />} />
               <Route path="/instances" element={<InstancesPage />} />
               <Route path="/mods" element={<ModsPage />} />
+              <Route path="/mod-suggestions" element={<ModSuggestionsPage />} />
               <Route path="/resource-packs" element={<ResourcePacksPage />} />
               <Route path="/updates" element={<UpdatesPage />} />
               <Route path="/settings" element={<SettingsPage />} />

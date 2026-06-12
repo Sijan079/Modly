@@ -9,7 +9,7 @@ use zip::ZipArchive;
 
 use crate::models::mod_metadata::{
     ModFile, ModIntegrityAudit, ModIntegrityAuditStatus, ModIntegrityReport, ModIntegrityStatus,
-    UpdateModMetadataInput,
+    ModSuggestion, UpdateModMetadataInput, UpsertModSuggestionInput,
 };
 use crate::services::hash_service::hash_file;
 use crate::services::mod_parser::parse_mod_jar;
@@ -69,6 +69,7 @@ pub async fn scan_instance_mods(instance_id: String) -> Result<Vec<ModFile>, Str
                 file_path: file_path.clone(),
                 enabled,
                 hash_sha256,
+                source_url: existing.as_ref().and_then(|m| m.source_url.clone()),
                 metadata,
                 categories: existing
                     .as_ref()
@@ -321,6 +322,24 @@ pub async fn toggle_mod_enabled(
 }
 
 #[command]
+pub async fn delete_mod(mod_id: String) -> Result<(), String> {
+    with_state(|state| {
+        let mod_file = state
+            .db
+            .get_mod_by_id(&mod_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Mod not found".to_string())?;
+
+        let path = Path::new(&mod_file.file_path);
+        if path.exists() {
+            std::fs::remove_file(path).map_err(|e| e.to_string())?;
+        }
+
+        state.db.delete_mod(&mod_id).map_err(|e| e.to_string())
+    })
+}
+
+#[command]
 pub async fn update_mod_metadata(input: UpdateModMetadataInput) -> Result<ModFile, String> {
     with_state(|state| {
         state
@@ -387,12 +406,51 @@ pub async fn copy_mod_to_instance(
             file_path: dest.to_string_lossy().to_string(),
             enabled: true,
             hash_sha256,
+            source_url: None,
             metadata,
             categories: vec![],
         };
 
         state.db.upsert_mod(&mod_file).map_err(|e| e.to_string())?;
         Ok(mod_file)
+    })
+}
+
+#[command]
+pub async fn list_mod_suggestions(instance_id: String) -> Result<Vec<ModSuggestion>, String> {
+    with_state(|state| {
+        state
+            .db
+            .list_mod_suggestions(&instance_id)
+            .map_err(|e| e.to_string())
+    })
+}
+
+#[command]
+pub async fn upsert_mod_suggestion(
+    input: UpsertModSuggestionInput,
+) -> Result<ModSuggestion, String> {
+    with_state(|state| {
+        if input.instance_id.trim().is_empty() {
+            return Err("Instance is required".to_string());
+        }
+        if input.name.trim().is_empty() && input.file_name.trim().is_empty() {
+            return Err("Mod name is required".to_string());
+        }
+        state
+            .db
+            .upsert_mod_suggestion(&input)
+            .map_err(|e| e.to_string())
+    })
+}
+
+#[command]
+pub async fn delete_mod_suggestion(id: String) -> Result<(), String> {
+    with_state(|state| {
+        state
+            .db
+            .delete_mod_suggestion(&id)
+            .map_err(|e| e.to_string())
     })
 }
 
@@ -486,9 +544,14 @@ fn build_mod_list_html(input: &ExportModListInput, css_path: &Path) -> String {
                 .map(|meta| join_or_fallback(&meta.authors, "Unknown"))
                 .unwrap_or_else(|| "Unknown".to_string());
             let href = mod_file
-                .metadata
-                .as_ref()
-                .and_then(|meta| meta.modrinth_url.clone())
+                .source_url
+                .clone()
+                .or_else(|| {
+                    mod_file
+                        .metadata
+                        .as_ref()
+                        .and_then(|meta| meta.modrinth_url.clone())
+                })
                 .unwrap_or_else(|| modrinth_search_url(&name));
 
             let _ = write!(

@@ -10,7 +10,7 @@ use crate::models::instance::{CreateInstanceInput, Instance, LoaderType, UpdateI
 use crate::models::launch::LaunchConfig;
 use crate::models::mod_metadata::{
     ModFile, ModIntegrityAudit, ModIntegrityAuditStatus, ModIntegrityReport, ModMetadata,
-    UpdateModMetadataInput,
+    ModSuggestion, UpdateModMetadataInput, UpsertModSuggestionInput,
 };
 use crate::models::pack_item::{PackItem, PackItemMetadata, PackType, UpdatePackItemMetadataInput};
 use crate::models::settings::AppSettings;
@@ -39,8 +39,20 @@ CREATE TABLE IF NOT EXISTS mods (
     file_path TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1,
     hash_sha256 TEXT,
+    source_url TEXT,
     metadata_json TEXT,
     UNIQUE(instance_id, file_path)
+);
+
+CREATE TABLE IF NOT EXISTS mod_suggestions (
+    id TEXT PRIMARY KEY NOT NULL,
+    instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+    file_name TEXT NOT NULL,
+    file_path TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    hash_sha256 TEXT,
+    source_url TEXT,
+    metadata_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS launch_configs (
@@ -80,6 +92,12 @@ CREATE TABLE IF NOT EXISTS mod_category_tags (
     PRIMARY KEY (mod_id, category_id)
 );
 
+CREATE TABLE IF NOT EXISTS mod_suggestion_category_tags (
+    suggestion_id TEXT NOT NULL REFERENCES mod_suggestions(id) ON DELETE CASCADE,
+    category_id TEXT NOT NULL REFERENCES instance_categories(id) ON DELETE CASCADE,
+    PRIMARY KEY (suggestion_id, category_id)
+);
+
 CREATE TABLE IF NOT EXISTS pack_items (
     id TEXT PRIMARY KEY NOT NULL,
     instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
@@ -110,6 +128,8 @@ CREATE TABLE IF NOT EXISTS update_checks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_mods_instance ON mods(instance_id);
+CREATE INDEX IF NOT EXISTS idx_mod_suggestions_instance ON mod_suggestions(instance_id);
+CREATE INDEX IF NOT EXISTS idx_mod_suggestion_categories ON mod_suggestion_category_tags(suggestion_id);
 CREATE INDEX IF NOT EXISTS idx_pack_items_instance ON pack_items(instance_id, pack_type);
 CREATE INDEX IF NOT EXISTS idx_categories_instance ON instance_categories(instance_id);
 CREATE INDEX IF NOT EXISTS idx_logs_created ON logs(created_at DESC);
@@ -137,6 +157,7 @@ impl Database {
         let conn = Connection::open(&db_path)
             .with_context(|| format!("Failed to open database at {}", db_path.display()))?;
         conn.execute_batch(SCHEMA)?;
+        ensure_column(&conn, "mods", "source_url", "TEXT")?;
         ensure_column(&conn, "pack_items", "hash_sha256", "TEXT")?;
         let cleared_pack_update_cache: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM settings WHERE key = 'cleared_pack_update_cache_v1')",
@@ -362,7 +383,7 @@ impl Database {
         let mods = {
             let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
             let mut stmt = conn.prepare(
-                "SELECT id, instance_id, file_name, file_path, enabled, hash_sha256, metadata_json
+                "SELECT id, instance_id, file_name, file_path, enabled, hash_sha256, source_url, metadata_json
                  FROM mods WHERE instance_id = ?1 ORDER BY file_name",
             )?;
             let rows = stmt.query_map(params![instance_id], |row| Self::row_to_mod_file(row))?;
@@ -372,7 +393,7 @@ impl Database {
     }
 
     fn row_to_mod_file(row: &rusqlite::Row<'_>) -> rusqlite::Result<ModFile> {
-        let metadata_json: Option<String> = row.get(6)?;
+        let metadata_json: Option<String> = row.get(7)?;
         let metadata = metadata_json
             .as_ref()
             .and_then(|j| serde_json::from_str(j).ok());
@@ -383,6 +404,7 @@ impl Database {
             file_path: row.get(3)?,
             enabled: row.get::<_, i32>(4)? != 0,
             hash_sha256: row.get(5)?,
+            source_url: row.get(6)?,
             metadata,
             categories: vec![],
         })
@@ -420,7 +442,7 @@ impl Database {
         let mod_file = {
             let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
             let mut stmt = conn.prepare(
-                "SELECT id, instance_id, file_name, file_path, enabled, hash_sha256, metadata_json
+                "SELECT id, instance_id, file_name, file_path, enabled, hash_sha256, source_url, metadata_json
                  FROM mods WHERE instance_id = ?1 AND file_path = ?2",
             )?;
             let mut rows =
@@ -437,7 +459,7 @@ impl Database {
         let mod_file = {
             let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
             let mut stmt = conn.prepare(
-                "SELECT id, instance_id, file_name, file_path, enabled, hash_sha256, metadata_json
+                "SELECT id, instance_id, file_name, file_path, enabled, hash_sha256, source_url, metadata_json
                  FROM mods WHERE id = ?1",
             )?;
             let mut rows = stmt.query_map(params![mod_id], Self::row_to_mod_file)?;
@@ -451,7 +473,7 @@ impl Database {
 
     pub fn upsert_mod(&self, mod_file: &ModFile) -> Result<()> {
         let existing = self.get_mod_by_path(&mod_file.instance_id, &mod_file.file_path)?;
-        let (id, metadata) = if let Some(existing) = existing {
+        let (id, source_url, metadata) = if let Some(existing) = existing {
             let keep_metadata = existing
                 .metadata
                 .as_ref()
@@ -462,9 +484,14 @@ impl Database {
             } else {
                 mod_file.metadata.clone()
             };
-            (existing.id, metadata)
+            let source_url = mod_file.source_url.clone().or(existing.source_url);
+            (existing.id, source_url, metadata)
         } else {
-            (mod_file.id.clone(), mod_file.metadata.clone())
+            (
+                mod_file.id.clone(),
+                normalize_url(mod_file.source_url.clone()),
+                mod_file.metadata.clone(),
+            )
         };
 
         let metadata_json = metadata
@@ -473,12 +500,13 @@ impl Database {
             .transpose()?;
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
         conn.execute(
-            "INSERT INTO mods (id, instance_id, file_name, file_path, enabled, hash_sha256, metadata_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO mods (id, instance_id, file_name, file_path, enabled, hash_sha256, source_url, metadata_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT(instance_id, file_path) DO UPDATE SET
                file_name = excluded.file_name,
                enabled = excluded.enabled,
                hash_sha256 = excluded.hash_sha256,
+               source_url = excluded.source_url,
                metadata_json = excluded.metadata_json",
             params![
                 id,
@@ -487,6 +515,7 @@ impl Database {
                 mod_file.file_path,
                 mod_file.enabled as i32,
                 mod_file.hash_sha256,
+                source_url,
                 metadata_json
             ],
         )?;
@@ -513,12 +542,18 @@ impl Database {
             installed_modrinth_version_id: input.installed_modrinth_version_id.clone(),
             customized: true,
         };
+        let source_url = normalize_url(
+            input
+                .source_url
+                .clone()
+                .or_else(|| input.modrinth_url.clone()),
+        );
 
         let metadata_json = serde_json::to_string(&metadata)?;
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
         conn.execute(
-            "UPDATE mods SET metadata_json = ?1 WHERE id = ?2",
-            params![metadata_json, input.mod_id],
+            "UPDATE mods SET source_url = ?1, metadata_json = ?2 WHERE id = ?3",
+            params![source_url, metadata_json, input.mod_id],
         )?;
         drop(conn);
 
@@ -540,6 +575,171 @@ impl Database {
                 params![mod_id, category_id],
             )?;
         }
+        Ok(())
+    }
+
+    pub fn list_mod_suggestions(&self, instance_id: &str) -> Result<Vec<ModSuggestion>> {
+        let suggestions = {
+            let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+            let mut stmt = conn.prepare(
+                "SELECT id, instance_id, file_name, file_path, enabled, hash_sha256, source_url, metadata_json
+                 FROM mod_suggestions WHERE instance_id = ?1 ORDER BY file_name",
+            )?;
+            let rows = stmt.query_map(params![instance_id], Self::row_to_mod_suggestion)?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        self.attach_categories_to_suggestions(suggestions)
+    }
+
+    fn row_to_mod_suggestion(row: &rusqlite::Row<'_>) -> rusqlite::Result<ModSuggestion> {
+        let metadata_json: Option<String> = row.get(7)?;
+        let metadata = metadata_json
+            .as_ref()
+            .and_then(|j| serde_json::from_str(j).ok());
+        Ok(ModSuggestion {
+            id: row.get(0)?,
+            instance_id: row.get(1)?,
+            file_name: row.get(2)?,
+            file_path: row.get(3)?,
+            enabled: row.get::<_, i32>(4)? != 0,
+            hash_sha256: row.get(5)?,
+            source_url: row.get(6)?,
+            metadata,
+            categories: vec![],
+        })
+    }
+
+    fn attach_categories_to_suggestions(
+        &self,
+        mut suggestions: Vec<ModSuggestion>,
+    ) -> Result<Vec<ModSuggestion>> {
+        if suggestions.is_empty() {
+            return Ok(suggestions);
+        }
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mut stmt = conn.prepare(
+            "SELECT mst.suggestion_id, ic.id, ic.instance_id, ic.name
+             FROM mod_suggestion_category_tags mst
+             JOIN instance_categories ic ON ic.id = mst.category_id
+             WHERE mst.suggestion_id = ?1
+             ORDER BY ic.name",
+        )?;
+        for suggestion in &mut suggestions {
+            let tags = stmt
+                .query_map(params![suggestion.id], |row| {
+                    Ok(InstanceCategory {
+                        id: row.get(1)?,
+                        instance_id: row.get(2)?,
+                        name: row.get(3)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            suggestion.categories = tags;
+        }
+        Ok(suggestions)
+    }
+
+    pub fn upsert_mod_suggestion(
+        &self,
+        input: &UpsertModSuggestionInput,
+    ) -> Result<ModSuggestion> {
+        let id = input
+            .id
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let source_url = normalize_url(input.source_url.clone());
+        let metadata = ModMetadata {
+            name: input.name.trim().to_string(),
+            version: input.version.trim().to_string(),
+            authors: input.authors.clone(),
+            modrinth_url: source_url
+                .as_ref()
+                .filter(|url| url.contains("modrinth.com"))
+                .cloned(),
+            dependencies: vec![],
+            loader: input.loader,
+            mod_id: input.mod_id_field.clone(),
+            installed_modrinth_version_id: None,
+            customized: true,
+        };
+        let file_name = if input.file_name.trim().is_empty() {
+            metadata.name.clone()
+        } else {
+            input.file_name.trim().to_string()
+        };
+        let metadata_json = serde_json::to_string(&metadata)?;
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        conn.execute(
+            "INSERT INTO mod_suggestions (id, instance_id, file_name, file_path, enabled, hash_sha256, source_url, metadata_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(id) DO UPDATE SET
+               instance_id = excluded.instance_id,
+               file_name = excluded.file_name,
+               file_path = excluded.file_path,
+               enabled = excluded.enabled,
+               hash_sha256 = excluded.hash_sha256,
+               source_url = excluded.source_url,
+               metadata_json = excluded.metadata_json",
+            params![
+                id,
+                input.instance_id,
+                file_name,
+                input.file_path,
+                input.enabled as i32,
+                input.hash_sha256,
+                source_url,
+                metadata_json
+            ],
+        )?;
+        drop(conn);
+        self.set_mod_suggestion_categories(&id, &input.category_ids)?;
+        self.get_mod_suggestion_by_id(&id)?
+            .ok_or_else(|| anyhow::anyhow!("Mod suggestion not found after save"))
+    }
+
+    pub fn set_mod_suggestion_categories(
+        &self,
+        suggestion_id: &str,
+        category_ids: &[String],
+    ) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        conn.execute(
+            "DELETE FROM mod_suggestion_category_tags WHERE suggestion_id = ?1",
+            params![suggestion_id],
+        )?;
+        for category_id in category_ids {
+            conn.execute(
+                "INSERT OR IGNORE INTO mod_suggestion_category_tags (suggestion_id, category_id) VALUES (?1, ?2)",
+                params![suggestion_id, category_id],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn get_mod_suggestion_by_id(&self, id: &str) -> Result<Option<ModSuggestion>> {
+        let suggestion = {
+            let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+            let mut stmt = conn.prepare(
+                "SELECT id, instance_id, file_name, file_path, enabled, hash_sha256, source_url, metadata_json
+                 FROM mod_suggestions WHERE id = ?1",
+            )?;
+            let mut rows = stmt.query_map(params![id], Self::row_to_mod_suggestion)?;
+            rows.next().transpose()?
+        };
+        Ok(match suggestion {
+            Some(s) => self.attach_categories_to_suggestions(vec![s])?.into_iter().next(),
+            None => None,
+        })
+    }
+
+    pub fn delete_mod_suggestion(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        conn.execute(
+            "DELETE FROM mod_suggestion_category_tags WHERE suggestion_id = ?1",
+            params![id],
+        )?;
+        conn.execute("DELETE FROM mod_suggestions WHERE id = ?1", params![id])?;
         Ok(())
     }
 

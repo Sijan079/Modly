@@ -1,4 +1,6 @@
+import { Trash2 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
+import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { PlatformLinkButton } from "@/components/ui/platform-link-button";
 import type { ModFile } from "@/lib/types";
@@ -9,6 +11,7 @@ interface ModTableProps {
   totalCount?: number;
   onToggle: (modId: string, enabled: boolean) => void;
   onEdit: (mod: ModFile) => void;
+  onDelete: (mod: ModFile) => void;
   loading?: boolean;
 }
 
@@ -17,6 +20,7 @@ export function ModTable({
   totalCount = 0,
   onToggle,
   onEdit,
+  onDelete,
   loading,
 }: ModTableProps) {
   if (loading) {
@@ -52,6 +56,9 @@ export function ModTable({
             <th className="w-[22%] px-4 py-3 text-left font-medium">Categories</th>
             <th className="w-[14%] px-4 py-3 text-left font-medium">Loader</th>
             <th className="w-[10%] px-4 py-3 text-left font-medium">Link</th>
+            <th className="w-14 px-4 py-3 text-left font-medium">
+              <span className="sr-only">Actions</span>
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -106,7 +113,22 @@ export function ModTable({
                 )}
               </td>
               <td className="px-4 py-3">
-                <PlatformLinkButton url={mod.metadata?.modrinthUrl ?? null} />
+                <PlatformLinkButton url={mod.sourceUrl ?? mod.metadata?.modrinthUrl ?? null} />
+              </td>
+              <td className="px-4 py-3">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-[var(--color-muted-foreground)] hover:bg-[var(--color-destructive)]/10 hover:text-[var(--color-destructive)]"
+                  aria-label={`Delete ${mod.metadata?.name ?? mod.fileName}`}
+                  title="Delete mod"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDelete(mod);
+                  }}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
               </td>
             </tr>
           ))}

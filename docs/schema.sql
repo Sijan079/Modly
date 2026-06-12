@@ -19,8 +19,20 @@ CREATE TABLE IF NOT EXISTS mods (
     file_path TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1,
     hash_sha256 TEXT,
+    source_url TEXT,
     metadata_json TEXT,
     UNIQUE(instance_id, file_path)
+);
+
+CREATE TABLE IF NOT EXISTS mod_suggestions (
+    id TEXT PRIMARY KEY NOT NULL,
+    instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+    file_name TEXT NOT NULL,
+    file_path TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    hash_sha256 TEXT,
+    source_url TEXT,
+    metadata_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS launch_configs (
@@ -60,6 +72,14 @@ CREATE TABLE IF NOT EXISTS mod_category_tags (
     PRIMARY KEY (mod_id, category_id)
 );
 
+CREATE TABLE IF NOT EXISTS mod_suggestion_category_tags (
+    suggestion_id TEXT NOT NULL REFERENCES mod_suggestions(id) ON DELETE CASCADE,
+    category_id TEXT NOT NULL REFERENCES instance_categories(id) ON DELETE CASCADE,
+    PRIMARY KEY (suggestion_id, category_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_mods_instance ON mods(instance_id);
+CREATE INDEX IF NOT EXISTS idx_mod_suggestions_instance ON mod_suggestions(instance_id);
+CREATE INDEX IF NOT EXISTS idx_mod_suggestion_categories ON mod_suggestion_category_tags(suggestion_id);
 CREATE INDEX IF NOT EXISTS idx_categories_instance ON instance_categories(instance_id);
 CREATE INDEX IF NOT EXISTS idx_logs_created ON logs(created_at DESC);

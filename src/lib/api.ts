@@ -10,7 +10,9 @@ import type {
   ModFile,
   ModIntegrityAudit,
   ModMetadata,
+  ModSuggestion,
   UpdateModMetadataInput,
+  UpsertModSuggestionInput,
   InstanceCategory,
   CreateCategoryInput,
   ExportModListInput,
@@ -58,6 +60,8 @@ export const api = {
   mods: {
     list: (instanceId: string) =>
       invoke<ModFile[]>("list_mods", { instanceId }),
+    listSuggestions: (instanceId: string) =>
+      invoke<ModSuggestion[]>("list_mod_suggestions", { instanceId }),
     scan: (instanceId: string) =>
       invoke<ModFile[]>("scan_instance_mods", { instanceId }),
     checkIntegrity: (instanceId: string) =>
@@ -68,12 +72,18 @@ export const api = {
       invoke<ModMetadata>("parse_mod_metadata", { filePath }),
     toggle: (instanceId: string, modId: string, enabled: boolean) =>
       invoke<void>("toggle_mod_enabled", { instanceId, modId, enabled }),
+    delete: (modId: string) =>
+      invoke<void>("delete_mod", { modId }),
+    deleteSuggestion: (id: string) =>
+      invoke<void>("delete_mod_suggestion", { id }),
     copyToInstance: (sourcePath: string, targetInstanceId: string) =>
       invoke<ModFile>("copy_mod_to_instance", { sourcePath, targetInstanceId }),
     exportHtml: (input: ExportModListInput) =>
       invoke<void>("export_mod_list_html", { input }),
     updateMetadata: (input: UpdateModMetadataInput) =>
       invoke<ModFile>("update_mod_metadata", { input }),
+    upsertSuggestion: (input: UpsertModSuggestionInput) =>
+      invoke<ModSuggestion>("upsert_mod_suggestion", { input }),
     resetMetadata: (modId: string) =>
       invoke<ModFile>("reset_mod_metadata", { modId }),
   },

@@ -32,9 +32,12 @@ export interface ModFile {
   filePath: string;
   enabled: boolean;
   hashSha256: string | null;
+  sourceUrl: string | null;
   metadata: ModMetadata | null;
   categories: InstanceCategory[];
 }
+
+export type ModSuggestion = ModFile;
 
 export type ModIntegrityStatus =
   | "ok"
@@ -106,9 +109,26 @@ export interface UpdateModMetadataInput {
   version: string;
   authors: string[];
   modrinthUrl: string | null;
+  sourceUrl?: string | null;
   loader: ModLoaderKind;
   modIdField: string | null;
   installedModrinthVersionId?: string | null;
+  categoryIds: string[];
+}
+
+export interface UpsertModSuggestionInput {
+  id?: string | null;
+  instanceId: string;
+  fileName: string;
+  filePath?: string;
+  enabled: boolean;
+  hashSha256?: string | null;
+  sourceUrl?: string | null;
+  name: string;
+  version: string;
+  authors: string[];
+  loader: ModLoaderKind;
+  modIdField?: string | null;
   categoryIds: string[];
 }
 

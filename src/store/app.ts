@@ -46,6 +46,7 @@ function modSearchText(mod: ModFile): string {
     meta?.version,
     meta?.modId,
     meta?.modrinthUrl,
+    mod.sourceUrl,
     meta?.loader ? formatLoader(meta.loader) : null,
     meta?.loader,
     ...(meta?.authors ?? []),

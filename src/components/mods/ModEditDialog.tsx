@@ -19,6 +19,7 @@ import type {
   UpdateModMetadataInput,
 } from "@/lib/types";
 import { formatLoader } from "@/lib/utils";
+import { normalizeSourceUrl } from "@/lib/mod-source-url";
 
 const LOADERS: ModLoaderKind[] = [
   "fabric",
@@ -62,7 +63,7 @@ export function ModEditDialog({
     setName(meta?.name ?? mod.fileName.replace(/\.jar$/i, ""));
     setVersion(meta?.version ?? "");
     setAuthors(meta?.authors?.join(", ") ?? "");
-    setWebsiteUrl(meta?.modrinthUrl ?? "");
+    setWebsiteUrl(mod.sourceUrl ?? meta?.modrinthUrl ?? "");
     setLoader((meta?.loader as ModLoaderKind) ?? "unknown");
     setSelectedCategoryIds(mod.categories.map((category) => category.id));
   }, [mod]);
@@ -78,7 +79,7 @@ export function ModEditDialog({
   };
 
   const handleSave = () => {
-    const url = normalizeWebsiteUrl(websiteUrl);
+    const url = normalizeSourceUrl(websiteUrl);
     onSave({
       modId: mod.id,
       name: name.trim() || "Unknown Mod",
@@ -87,7 +88,8 @@ export function ModEditDialog({
         .split(",")
         .map((author) => author.trim())
         .filter(Boolean),
-      modrinthUrl: url || null,
+      modrinthUrl: url.includes("modrinth.com") ? url : null,
+      sourceUrl: url || null,
       loader,
       modIdField: mod.metadata?.modId ?? null,
       categoryIds: selectedCategoryIds,
@@ -95,7 +97,7 @@ export function ModEditDialog({
   };
 
   const openWebsite = () => {
-    const url = normalizeWebsiteUrl(websiteUrl);
+    const url = normalizeSourceUrl(websiteUrl);
     if (url) {
       openUrl(url);
     }
@@ -172,7 +174,7 @@ export function ModEditDialog({
                 variant="outline"
                 size="icon"
                 onClick={openWebsite}
-                disabled={!normalizeWebsiteUrl(websiteUrl)}
+                disabled={!normalizeSourceUrl(websiteUrl)}
                 title="Open in browser"
               >
                 <ExternalLink className="h-4 w-4" />
@@ -233,17 +235,4 @@ export function ModEditDialog({
       </DialogContent>
     </Dialog>
   );
-}
-
-function normalizeWebsiteUrl(input: string): string {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    return "";
-  }
-
-  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-    return trimmed;
-  }
-
-  return `https://${trimmed.replace(/^\/+/, "")}`;
 }

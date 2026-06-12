@@ -25,6 +25,7 @@ import { CategoryManager } from "@/components/mods/CategoryManager";
 import { useInstances } from "@/hooks/useInstances";
 import {
   useCheckModIntegrity,
+  useDeleteMod,
   useLatestModIntegrityAudit,
   useMods,
   useResetModMetadata,
@@ -56,6 +57,7 @@ export function ModsPage() {
   const integrityMutation = useCheckModIntegrity();
   const { data: latestIntegrityAudit = null } = useLatestModIntegrityAudit(instanceId);
   const toggleMutation = useToggleMod();
+  const deleteMutation = useDeleteMod();
   const updateMetaMutation = useUpdateModMetadata();
   const resetMetaMutation = useResetModMetadata();
 
@@ -184,6 +186,25 @@ export function ModsPage() {
   const handleMenuExportModList = async () => {
     setToolsOpen(false);
     await handleExportModList();
+  };
+
+  const handleDeleteMod = (mod: ModFile) => {
+    const displayName = mod.metadata?.name ?? mod.fileName;
+    const typedName = window.prompt(
+      `Delete "${displayName}"?\n\nThis removes the mod file from disk and clears its saved metadata.\nType the mod name to confirm.`
+    );
+    if (typedName !== displayName) return;
+
+    deleteMutation.mutate(
+      { instanceId: mod.instanceId, modId: mod.id },
+      {
+        onSuccess: () => {
+          if (editingMod?.id === mod.id) {
+            setEditingMod(null);
+          }
+        },
+      }
+    );
   };
 
   const description =
@@ -330,6 +351,7 @@ export function ModsPage() {
               toggleMutation.mutate({ instanceId, modId, enabled });
             }
           }}
+          onDelete={handleDeleteMod}
         />
       </div>
 

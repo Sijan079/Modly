@@ -156,7 +156,8 @@ pub async fn confirm_update_match(input: ConfirmUpdateMatchInput) -> Result<(), 
                     .as_ref()
                     .map(|meta| meta.authors.clone())
                     .unwrap_or_default(),
-                modrinth_url: Some(project_url),
+                modrinth_url: Some(project_url.clone()),
+                source_url: Some(project_url),
                 loader: metadata
                     .as_ref()
                     .map(|meta| meta.loader)
@@ -252,6 +253,7 @@ pub async fn update_mod_from_modrinth(
             file_path: new_path.to_string_lossy().to_string(),
             enabled: true,
             hash_sha256: hash_file(&new_path).ok(),
+            source_url: existing.source_url,
             metadata,
             categories: existing.categories,
         };
