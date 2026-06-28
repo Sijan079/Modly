@@ -20,7 +20,7 @@ use commands::launcher::{
 use commands::mods::{
     check_mod_integrity, copy_mod_to_instance, delete_mod, delete_mod_suggestion,
     export_mod_list_html, get_latest_mod_integrity_audit, list_mod_suggestions, list_mods,
-    parse_mod_metadata, reset_mod_metadata, scan_instance_mods, set_mod_enabled,
+    parse_mod_metadata, promote_mod_suggestion, reset_mod_metadata, scan_instance_mods, set_mod_enabled,
     toggle_mod_enabled, update_mod_metadata, upsert_mod_suggestion,
 };
 use commands::packs::{
@@ -30,7 +30,8 @@ use commands::scan::{get_default_minecraft_path, scan_default_minecraft, scan_mi
 use commands::settings::{get_settings, save_settings};
 use commands::updates::{
     append_update_log, check_update_target, check_updates, confirm_update_match,
-    get_latest_update_check, list_update_targets, save_update_check, update_mod_from_modrinth,
+    get_latest_update_check, install_suggestion_from_modrinth, list_suggestion_modrinth_versions,
+    list_update_targets, save_update_check, update_mod_from_modrinth,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -76,6 +77,7 @@ pub fn run() {
             update_mod_metadata,
             upsert_mod_suggestion,
             reset_mod_metadata,
+            promote_mod_suggestion,
             copy_mod_to_instance,
             export_mod_list_html,
             list_pack_items,
@@ -114,6 +116,8 @@ pub fn run() {
             check_update_target,
             confirm_update_match,
             update_mod_from_modrinth,
+            list_suggestion_modrinth_versions,
+            install_suggestion_from_modrinth,
             append_update_log,
         ])
         .run(tauri::generate_context!())

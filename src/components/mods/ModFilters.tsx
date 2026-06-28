@@ -1,8 +1,9 @@
 import { Filter, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { InstanceCategory, ModLoaderKind } from "@/lib/types";
+import type { InstanceCategory, ModLoaderKind, ModSide } from "@/lib/types";
 import {
   type ModListFilters,
+  type ModSortOption,
   type ModStatusFilter,
 } from "@/store/app";
 import { formatLoader } from "@/lib/utils";
@@ -16,6 +17,15 @@ const LOADERS: Array<ModLoaderKind | "all"> = [
   "unknown",
 ];
 
+const SIDES: Array<ModSide | "all"> = ["all", "client", "server", "both"];
+
+const SORT_OPTIONS: Array<{ value: ModSortOption; label: string }> = [
+  { value: "nameAsc", label: "A-Z" },
+  { value: "nameDesc", label: "Z-A" },
+  { value: "installedNewest", label: "Newest installed" },
+  { value: "installedOldest", label: "Oldest installed" },
+];
+
 interface ModFiltersProps {
   filters: ModListFilters;
   onChange: (filters: ModListFilters) => void;
@@ -23,6 +33,7 @@ interface ModFiltersProps {
   instanceId: string | null;
   onClear: () => void;
   showClear: boolean;
+  showSideFilter?: boolean;
 }
 
 export function ModFilters({
@@ -32,6 +43,7 @@ export function ModFilters({
   instanceId,
   onClear,
   showClear,
+  showSideFilter = true,
 }: ModFiltersProps) {
   return (
     <>
@@ -66,6 +78,48 @@ export function ModFilters({
         {LOADERS.map((l) => (
           <option key={l} value={l}>
             {l === "all" ? "All loaders" : formatLoader(l)}
+          </option>
+        ))}
+      </select>
+      {showSideFilter && (
+        <select
+          className="h-9 min-w-[7rem] rounded-md border border-[var(--color-input)] bg-[var(--color-muted)] px-2 text-sm"
+          value={filters.side}
+          onChange={(e) =>
+            onChange({
+              ...filters,
+              side: e.target.value as ModSide | "all",
+            })
+          }
+          aria-label="Filter by side"
+        >
+          {SIDES.map((side) => (
+            <option key={side} value={side}>
+              {side === "all"
+                ? "All sides"
+                : side === "client"
+                  ? "Client"
+                  : side === "server"
+                    ? "Server"
+                    : "Both"}
+            </option>
+          ))}
+        </select>
+      )}
+      <select
+        className="h-9 min-w-[10rem] rounded-md border border-[var(--color-input)] bg-[var(--color-muted)] px-2 text-sm"
+        value={filters.sort}
+        onChange={(e) =>
+          onChange({
+            ...filters,
+            sort: e.target.value as ModSortOption,
+          })
+        }
+        aria-label="Sort mods"
+      >
+        {SORT_OPTIONS.map((option) => (
+          <option key={option.value} value={option.value}>
+            Sort: {option.label}
           </option>
         ))}
       </select>

@@ -88,6 +88,47 @@ export function useDeleteModSuggestion() {
   });
 }
 
+export function usePromoteModSuggestion() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ instanceId: _instanceId, suggestionId }: { instanceId: string; suggestionId: string }) =>
+      api.mods.promoteSuggestion(suggestionId),
+    onSuccess: (_mod, { instanceId }) => {
+      qc.invalidateQueries({ queryKey: ["mod-suggestions", instanceId] });
+      qc.invalidateQueries({ queryKey: ["mods", instanceId] });
+      qc.invalidateQueries({ queryKey: ["instances"] });
+      qc.invalidateQueries({ queryKey: ["categories", instanceId] });
+    },
+  });
+}
+
+export function useSuggestionVersions() {
+  return useMutation({
+    mutationFn: ({
+      suggestionId,
+      gameVersion,
+      loader,
+    }: {
+      suggestionId: string;
+      gameVersion?: string | null;
+      loader?: string | null;
+    }) => api.updates.listSuggestionVersions(suggestionId, gameVersion, loader),
+  });
+}
+
+export function useInstallSuggestion() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.updates.installSuggestion,
+    onSuccess: (mod) => {
+      qc.invalidateQueries({ queryKey: ["mod-suggestions", mod.instanceId] });
+      qc.invalidateQueries({ queryKey: ["mods", mod.instanceId] });
+      qc.invalidateQueries({ queryKey: ["instances"] });
+      qc.invalidateQueries({ queryKey: ["categories", mod.instanceId] });
+    },
+  });
+}
+
 export function useDeleteMod() {
   const qc = useQueryClient();
   return useMutation({

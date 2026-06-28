@@ -16,6 +16,7 @@ import type {
   InstanceCategory,
   ModFile,
   ModLoaderKind,
+  ModSide,
   UpdateModMetadataInput,
 } from "@/lib/types";
 import { formatLoader } from "@/lib/utils";
@@ -28,6 +29,8 @@ const LOADERS: ModLoaderKind[] = [
   "quilt",
   "unknown",
 ];
+
+const SIDES: ModSide[] = ["unknown", "client", "server", "both"];
 
 interface ModEditDialogProps {
   mod: ModFile | null;
@@ -55,6 +58,7 @@ export function ModEditDialog({
   const [authors, setAuthors] = useState("");
   const [websiteUrl, setWebsiteUrl] = useState("");
   const [loader, setLoader] = useState<ModLoaderKind>("unknown");
+  const [side, setSide] = useState<ModSide>("unknown");
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>([]);
 
   useEffect(() => {
@@ -65,6 +69,7 @@ export function ModEditDialog({
     setAuthors(meta?.authors?.join(", ") ?? "");
     setWebsiteUrl(mod.sourceUrl ?? meta?.modrinthUrl ?? "");
     setLoader((meta?.loader as ModLoaderKind) ?? "unknown");
+    setSide(meta?.side ?? "unknown");
     setSelectedCategoryIds(mod.categories.map((category) => category.id));
   }, [mod]);
 
@@ -91,6 +96,7 @@ export function ModEditDialog({
       modrinthUrl: url.includes("modrinth.com") ? url : null,
       sourceUrl: url || null,
       loader,
+      side,
       modIdField: mod.metadata?.modId ?? null,
       categoryIds: selectedCategoryIds,
     });
@@ -147,6 +153,27 @@ export function ModEditDialog({
                 {LOADERS.map((loaderOption) => (
                   <option key={loaderOption} value={loaderOption}>
                     {formatLoader(loaderOption)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="mod-side">Side</Label>
+              <select
+                id="mod-side"
+                className="flex h-9 w-full rounded-md border border-[var(--color-input)] bg-[var(--color-muted)] px-3 text-sm"
+                value={side}
+                onChange={(e) => setSide(e.target.value as ModSide)}
+              >
+                {SIDES.map((sideOption) => (
+                  <option key={sideOption} value={sideOption}>
+                    {sideOption === "unknown"
+                      ? ""
+                      : sideOption === "client"
+                      ? "Client"
+                      : sideOption === "server"
+                        ? "Server"
+                        : "Both"}
                   </option>
                 ))}
               </select>

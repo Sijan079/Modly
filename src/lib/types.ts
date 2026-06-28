@@ -30,6 +30,7 @@ export interface ModFile {
   instanceId: string;
   fileName: string;
   filePath: string;
+  installedAt: string;
   enabled: boolean;
   hashSha256: string | null;
   sourceUrl: string | null;
@@ -73,6 +74,7 @@ export interface ExportModListInput {
   appliedSearch: string;
   statusFilter: string;
   loaderFilter: string;
+  sideFilter: string;
   categoryFilter: string | null;
   totalCount: number;
   mods: ModFile[];
@@ -86,6 +88,8 @@ export type ModLoaderKind =
   | "quilt"
   | "unknown";
 
+export type ModSide = "unknown" | "client" | "server" | "both";
+
 export interface ModMetadata {
   name: string;
   version: string;
@@ -93,6 +97,7 @@ export interface ModMetadata {
   modrinthUrl: string | null;
   dependencies: ModDependency[];
   loader: ModLoaderKind;
+  side: ModSide;
   modId: string | null;
   installedModrinthVersionId?: string | null;
   customized?: boolean;
@@ -111,6 +116,7 @@ export interface UpdateModMetadataInput {
   modrinthUrl: string | null;
   sourceUrl?: string | null;
   loader: ModLoaderKind;
+  side: ModSide;
   modIdField: string | null;
   installedModrinthVersionId?: string | null;
   categoryIds: string[];
@@ -307,6 +313,23 @@ export interface ConfirmUpdateMatchInput {
 
 export interface UpdateModFromModrinthInput {
   modId: string;
+  versionId: string;
+  downloadUrl: string;
+  fileName: string;
+  expectedSha256: string | null;
+}
+
+export interface SuggestionVersionOption {
+  versionId: string;
+  versionNumber: string;
+  downloadUrl: string;
+  fileName: string;
+  expectedSha256: string | null;
+  releaseDate: string;
+}
+
+export interface InstallSuggestionFromModrinthInput {
+  suggestionId: string;
   versionId: string;
   downloadUrl: string;
   fileName: string;

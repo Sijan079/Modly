@@ -1,6 +1,7 @@
 use std::fmt::Write as _;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use serde::Deserialize;
 use tauri::command;
@@ -18,7 +19,22 @@ use crate::state::with_state;
 
 #[command]
 pub async fn list_mods(instance_id: String) -> Result<Vec<ModFile>, String> {
-    with_state(|state| state.db.list_mods(&instance_id).map_err(|e| e.to_string()))
+    with_state(|state| {
+        let mods = state.db.list_mods(&instance_id).map_err(|e| e.to_string())?;
+        let refreshed = mods
+            .into_iter()
+            .map(|mut mod_file| {
+                if let Some(installed_at) = file_installed_at(Path::new(&mod_file.file_path)) {
+                    if mod_file.installed_at != installed_at {
+                        mod_file.installed_at = installed_at;
+                        state.db.upsert_mod(&mod_file).map_err(|e| e.to_string())?;
+                    }
+                }
+                Ok(mod_file)
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(refreshed)
+    })
 }
 
 #[command]
@@ -67,6 +83,9 @@ pub async fn scan_instance_mods(instance_id: String) -> Result<Vec<ModFile>, Str
                 instance_id: instance_id.clone(),
                 file_name,
                 file_path: file_path.clone(),
+                installed_at: file_installed_at(&jar_path)
+                    .or_else(|| existing.as_ref().map(|m| m.installed_at.clone()))
+                    .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
                 enabled,
                 hash_sha256,
                 source_url: existing.as_ref().and_then(|m| m.source_url.clone()),
@@ -404,6 +423,7 @@ pub async fn copy_mod_to_instance(
             instance_id: target_instance_id,
             file_name: file_name.to_string_lossy().to_string(),
             file_path: dest.to_string_lossy().to_string(),
+            installed_at: file_installed_at(&dest).unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
             enabled: true,
             hash_sha256,
             source_url: None,
@@ -414,6 +434,76 @@ pub async fn copy_mod_to_instance(
         state.db.upsert_mod(&mod_file).map_err(|e| e.to_string())?;
         Ok(mod_file)
     })
+}
+
+#[command]
+pub async fn promote_mod_suggestion(suggestion_id: String) -> Result<ModFile, String> {
+    with_state(|state| {
+        let suggestion = state
+            .db
+            .get_mod_suggestion_by_id(&suggestion_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Suggestion not found".to_string())?;
+
+        if suggestion.file_path.trim().is_empty() {
+            return Err("Suggestion has no downloaded file attached".to_string());
+        }
+
+        let instance = state
+            .db
+            .get_instance(&suggestion.instance_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Instance not found".to_string())?;
+
+        let source = Path::new(&suggestion.file_path);
+        if !source.exists() {
+            return Err("Downloaded file could not be found".to_string());
+        }
+
+        let file_name = source
+            .file_name()
+            .ok_or_else(|| "Invalid suggestion file path".to_string())?;
+        let dest = Path::new(&instance.game_dir).join("mods").join(file_name);
+        std::fs::create_dir_all(dest.parent().unwrap()).map_err(|e| e.to_string())?;
+        std::fs::copy(source, &dest).map_err(|e| e.to_string())?;
+
+        let metadata = suggestion.metadata.clone().or_else(|| parse_mod_jar(&dest).ok());
+        let hash_sha256 = hash_file(&dest).ok();
+        let mod_file = ModFile {
+            id: Uuid::new_v4().to_string(),
+            instance_id: suggestion.instance_id.clone(),
+            file_name: file_name.to_string_lossy().to_string(),
+            file_path: dest.to_string_lossy().to_string(),
+            installed_at: file_installed_at(&dest).unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+            enabled: true,
+            hash_sha256,
+            source_url: suggestion.source_url.clone(),
+            metadata,
+            categories: suggestion.categories.clone(),
+        };
+
+        state.db.upsert_mod(&mod_file).map_err(|e| e.to_string())?;
+        let saved = state
+            .db
+            .get_mod_by_path(&suggestion.instance_id, &mod_file.file_path)
+            .map_err(|e| e.to_string())?
+            .unwrap_or(mod_file);
+        state
+            .db
+            .delete_mod_suggestion(&suggestion_id)
+            .map_err(|e| e.to_string())?;
+        Ok(saved)
+    })
+}
+
+fn file_installed_at(path: &Path) -> Option<String> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let system_time = metadata
+        .created()
+        .ok()
+        .or_else(|| metadata.modified().ok())
+        .unwrap_or(SystemTime::now());
+    Some(chrono::DateTime::<chrono::Utc>::from(system_time).to_rfc3339())
 }
 
 #[command]
@@ -461,6 +551,7 @@ pub struct ExportModListInput {
     pub applied_search: String,
     pub status_filter: String,
     pub loader_filter: String,
+    pub side_filter: String,
     pub category_filter: Option<String>,
     pub total_count: usize,
     pub mods: Vec<ModFile>,
@@ -538,6 +629,11 @@ fn build_mod_list_html(input: &ExportModListInput, css_path: &Path) -> String {
                 .as_ref()
                 .map(|meta| format_loader_label(meta.loader))
                 .unwrap_or("Unknown");
+            let side = mod_file
+                .metadata
+                .as_ref()
+                .map(|meta| format_side_label(meta.side))
+                .unwrap_or("Both");
             let authors = mod_file
                 .metadata
                 .as_ref()
@@ -558,12 +654,13 @@ fn build_mod_list_html(input: &ExportModListInput, css_path: &Path) -> String {
                 items,
                 "<li>\
                     <a href=\"{}\" target=\"_blank\" rel=\"noreferrer\">{}</a>\
-                    <div class=\"meta\">{} · {} · {}</div>\
+                    <div class=\"meta\">{} · {} · {} · {}</div>\
                 </li>",
                 escape_html(&href),
                 escape_html(&name),
                 escape_html(version),
                 escape_html(loader),
+                escape_html(side),
                 escape_html(&authors)
             );
         }
@@ -594,7 +691,7 @@ fn build_mod_list_html(input: &ExportModListInput, css_path: &Path) -> String {
     <div class=\"summary\">\
       <h3>Enabled Mods Exported: {shown}</h3>\
       <p>From {total} total mods · Generated {generated}</p>\
-      <p>Search: {search} · Status: {status} · Loader: {loader} · Category: {category}</p>\
+      <p>Search: {search} · Status: {status} · Loader: {loader} · Side: {side} · Category: {category}</p>\
     </div>\
     {sections}\
   </main>\
@@ -612,6 +709,7 @@ fn build_mod_list_html(input: &ExportModListInput, css_path: &Path) -> String {
         }),
         status = escape_html(&input.status_filter),
         loader = escape_html(&input.loader_filter),
+        side = escape_html(&input.side_filter),
         category = escape_html(input.category_filter.as_deref().unwrap_or("All categories")),
         sections = sections
     )
@@ -754,6 +852,15 @@ fn format_loader_label(loader: crate::models::mod_metadata::LoaderKind) -> &'sta
         crate::models::mod_metadata::LoaderKind::NeoForge => "NeoForge",
         crate::models::mod_metadata::LoaderKind::Quilt => "Quilt",
         crate::models::mod_metadata::LoaderKind::Unknown => "Unknown",
+    }
+}
+
+fn format_side_label(side: crate::models::mod_metadata::ModSide) -> &'static str {
+    match side {
+        crate::models::mod_metadata::ModSide::Unknown => "",
+        crate::models::mod_metadata::ModSide::Client => "Client",
+        crate::models::mod_metadata::ModSide::Server => "Server",
+        crate::models::mod_metadata::ModSide::Both => "Both",
     }
 }
 

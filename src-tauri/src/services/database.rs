@@ -3,6 +3,7 @@ use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::models::category::{CreateCategoryInput, InstanceCategory};
@@ -10,7 +11,7 @@ use crate::models::instance::{CreateInstanceInput, Instance, LoaderType, UpdateI
 use crate::models::launch::LaunchConfig;
 use crate::models::mod_metadata::{
     ModFile, ModIntegrityAudit, ModIntegrityAuditStatus, ModIntegrityReport, ModMetadata,
-    ModSuggestion, UpdateModMetadataInput, UpsertModSuggestionInput,
+    ModSide, ModSuggestion, UpdateModMetadataInput, UpsertModSuggestionInput,
 };
 use crate::models::pack_item::{PackItem, PackItemMetadata, PackType, UpdatePackItemMetadataInput};
 use crate::models::settings::AppSettings;
@@ -37,6 +38,7 @@ CREATE TABLE IF NOT EXISTS mods (
     instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
     file_name TEXT NOT NULL,
     file_path TEXT NOT NULL,
+    installed_at TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1,
     hash_sha256 TEXT,
     source_url TEXT,
@@ -150,6 +152,48 @@ fn ensure_column(conn: &Connection, table: &str, column: &str, definition: &str)
     Ok(())
 }
 
+fn reset_legacy_mod_side_defaults(conn: &Connection) -> Result<()> {
+    let already_reset: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM settings WHERE key = 'reset_mod_side_defaults_v1')",
+        [],
+        |row| row.get(0),
+    )?;
+    if already_reset {
+        return Ok(());
+    }
+
+    let mut stmt = conn.prepare("SELECT id, metadata_json FROM mods WHERE metadata_json IS NOT NULL")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+
+    for row in rows {
+        let (id, metadata_json) = row?;
+        let Ok(mut value) = serde_json::from_str::<Value>(&metadata_json) else {
+            continue;
+        };
+        let Some(side) = value.get("side").and_then(|entry| entry.as_str()) else {
+            continue;
+        };
+        if side != "both" {
+            continue;
+        }
+        if let Some(object) = value.as_object_mut() {
+            object.insert("side".to_string(), Value::String("unknown".to_string()));
+            conn.execute(
+                "UPDATE mods SET metadata_json = ?1 WHERE id = ?2",
+                params![serde_json::to_string(&value)?, id],
+            )?;
+        }
+    }
+
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES ('reset_mod_side_defaults_v1', 'true')",
+        [],
+    )?;
+    Ok(())
+}
+
 impl Database {
     pub fn new(app_data_dir: PathBuf) -> Result<Self> {
         std::fs::create_dir_all(&app_data_dir)?;
@@ -158,6 +202,12 @@ impl Database {
             .with_context(|| format!("Failed to open database at {}", db_path.display()))?;
         conn.execute_batch(SCHEMA)?;
         ensure_column(&conn, "mods", "source_url", "TEXT")?;
+        ensure_column(&conn, "mods", "installed_at", "TEXT NOT NULL DEFAULT ''")?;
+        conn.execute(
+            "UPDATE mods SET installed_at = COALESCE(NULLIF(installed_at, ''), CURRENT_TIMESTAMP)",
+            [],
+        )?;
+        reset_legacy_mod_side_defaults(&conn)?;
         ensure_column(&conn, "pack_items", "hash_sha256", "TEXT")?;
         let cleared_pack_update_cache: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM settings WHERE key = 'cleared_pack_update_cache_v1')",
@@ -383,7 +433,7 @@ impl Database {
         let mods = {
             let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
             let mut stmt = conn.prepare(
-                "SELECT id, instance_id, file_name, file_path, enabled, hash_sha256, source_url, metadata_json
+                "SELECT id, instance_id, file_name, file_path, installed_at, enabled, hash_sha256, source_url, metadata_json
                  FROM mods WHERE instance_id = ?1 ORDER BY file_name",
             )?;
             let rows = stmt.query_map(params![instance_id], |row| Self::row_to_mod_file(row))?;
@@ -393,7 +443,7 @@ impl Database {
     }
 
     fn row_to_mod_file(row: &rusqlite::Row<'_>) -> rusqlite::Result<ModFile> {
-        let metadata_json: Option<String> = row.get(7)?;
+        let metadata_json: Option<String> = row.get(8)?;
         let metadata = metadata_json
             .as_ref()
             .and_then(|j| serde_json::from_str(j).ok());
@@ -402,9 +452,10 @@ impl Database {
             instance_id: row.get(1)?,
             file_name: row.get(2)?,
             file_path: row.get(3)?,
-            enabled: row.get::<_, i32>(4)? != 0,
-            hash_sha256: row.get(5)?,
-            source_url: row.get(6)?,
+            installed_at: row.get(4)?,
+            enabled: row.get::<_, i32>(5)? != 0,
+            hash_sha256: row.get(6)?,
+            source_url: row.get(7)?,
             metadata,
             categories: vec![],
         })
@@ -442,7 +493,7 @@ impl Database {
         let mod_file = {
             let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
             let mut stmt = conn.prepare(
-                "SELECT id, instance_id, file_name, file_path, enabled, hash_sha256, source_url, metadata_json
+                "SELECT id, instance_id, file_name, file_path, installed_at, enabled, hash_sha256, source_url, metadata_json
                  FROM mods WHERE instance_id = ?1 AND file_path = ?2",
             )?;
             let mut rows =
@@ -459,7 +510,7 @@ impl Database {
         let mod_file = {
             let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
             let mut stmt = conn.prepare(
-                "SELECT id, instance_id, file_name, file_path, enabled, hash_sha256, source_url, metadata_json
+                "SELECT id, instance_id, file_name, file_path, installed_at, enabled, hash_sha256, source_url, metadata_json
                  FROM mods WHERE id = ?1",
             )?;
             let mut rows = stmt.query_map(params![mod_id], Self::row_to_mod_file)?;
@@ -473,7 +524,8 @@ impl Database {
 
     pub fn upsert_mod(&self, mod_file: &ModFile) -> Result<()> {
         let existing = self.get_mod_by_path(&mod_file.instance_id, &mod_file.file_path)?;
-        let (id, source_url, metadata) = if let Some(existing) = existing {
+        let now = chrono::Utc::now().to_rfc3339();
+        let (id, installed_at, source_url, metadata) = if let Some(existing) = existing {
             let keep_metadata = existing
                 .metadata
                 .as_ref()
@@ -485,10 +537,20 @@ impl Database {
                 mod_file.metadata.clone()
             };
             let source_url = mod_file.source_url.clone().or(existing.source_url);
-            (existing.id, source_url, metadata)
+            let installed_at = if mod_file.installed_at.trim().is_empty() {
+                existing.installed_at
+            } else {
+                mod_file.installed_at.clone()
+            };
+            (existing.id, installed_at, source_url, metadata)
         } else {
             (
                 mod_file.id.clone(),
+                if mod_file.installed_at.trim().is_empty() {
+                    now
+                } else {
+                    mod_file.installed_at.clone()
+                },
                 normalize_url(mod_file.source_url.clone()),
                 mod_file.metadata.clone(),
             )
@@ -500,8 +562,8 @@ impl Database {
             .transpose()?;
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
         conn.execute(
-            "INSERT INTO mods (id, instance_id, file_name, file_path, enabled, hash_sha256, source_url, metadata_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            "INSERT INTO mods (id, instance_id, file_name, file_path, installed_at, enabled, hash_sha256, source_url, metadata_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT(instance_id, file_path) DO UPDATE SET
                file_name = excluded.file_name,
                enabled = excluded.enabled,
@@ -513,6 +575,7 @@ impl Database {
                 mod_file.instance_id,
                 mod_file.file_name,
                 mod_file.file_path,
+                installed_at,
                 mod_file.enabled as i32,
                 mod_file.hash_sha256,
                 source_url,
@@ -538,6 +601,7 @@ impl Database {
                 .map(|m| m.dependencies.clone())
                 .unwrap_or_default(),
             loader: input.loader,
+            side: input.side,
             mod_id: input.mod_id_field.clone(),
             installed_modrinth_version_id: input.installed_modrinth_version_id.clone(),
             customized: true,
@@ -659,6 +723,7 @@ impl Database {
                 .cloned(),
             dependencies: vec![],
             loader: input.loader,
+            side: ModSide::Unknown,
             mod_id: input.mod_id_field.clone(),
             installed_modrinth_version_id: None,
             customized: true,
@@ -741,6 +806,27 @@ impl Database {
         )?;
         conn.execute("DELETE FROM mod_suggestions WHERE id = ?1", params![id])?;
         Ok(())
+    }
+
+    pub fn get_mod_suggestion_by_path(
+        &self,
+        instance_id: &str,
+        file_path: &str,
+    ) -> Result<Option<ModSuggestion>> {
+        let suggestion = {
+            let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+            let mut stmt = conn.prepare(
+                "SELECT id, instance_id, file_name, file_path, enabled, hash_sha256, source_url, metadata_json
+                 FROM mod_suggestions WHERE instance_id = ?1 AND file_path = ?2",
+            )?;
+            let mut rows =
+                stmt.query_map(params![instance_id, file_path], Self::row_to_mod_suggestion)?;
+            rows.next().transpose()?
+        };
+        Ok(match suggestion {
+            Some(s) => self.attach_categories_to_suggestions(vec![s])?.into_iter().next(),
+            None => None,
+        })
     }
 
     pub fn list_categories(&self, instance_id: &str) -> Result<Vec<InstanceCategory>> {

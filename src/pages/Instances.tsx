@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { confirm, open, save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { CheckCircle2, FolderOpen, Loader2, Plus, Import, XCircle } from "lucide-react";
 import { PageShell } from "@/components/layout/PageShell";
 import { PageSearchBar } from "@/components/layout/PageSearchBar";
@@ -8,6 +8,7 @@ import { PageToolbar } from "@/components/layout/PageToolbar";
 import { InstanceCard } from "@/components/instances/InstanceCard";
 import { InstanceEditDialog } from "@/components/instances/InstanceEditDialog";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -37,6 +38,9 @@ export function InstancesPage() {
   const [instanceSearch, setInstanceSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [editingInstance, setEditingInstance] = useState<Instance | null>(null);
+  const [pendingDeleteInstance, setPendingDeleteInstance] = useState<Instance | null>(null);
+  const [deleteInstanceName, setDeleteInstanceName] = useState("");
+  const [deleteInstanceFiles, setDeleteInstanceFiles] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDir, setNewDir] = useState("");
   const [newLoader, setNewLoader] = useState<LoaderType>("fabric");
@@ -229,39 +233,28 @@ export function InstancesPage() {
     });
   };
 
-  const handleDelete = async (instance: Instance) => {
-    const shouldDelete = await confirm(
-      `Delete "${instance.name}" from the list?\n\nThis keeps the instance folder on disk unless you confirm file deletion in the next step.`,
-      {
-        title: "Delete Instance",
-        kind: "warning",
-        okLabel: "Remove from List",
-        cancelLabel: "Cancel",
-      }
-    );
-    if (!shouldDelete) return;
+  const confirmDelete = (instance: Instance) => {
+    setPendingDeleteInstance(instance);
+    setDeleteInstanceName("");
+    setDeleteInstanceFiles(false);
+  };
 
-    const deleteFiles = await confirm(
-      `Also delete the instance files for "${instance.name}" from disk?`,
-      {
-        title: "Delete Instance Files",
-        kind: "warning",
-        okLabel: "Delete Files Too",
-        cancelLabel: "Keep Files",
-      }
-    );
-
+  const handleDelete = async () => {
+    if (!pendingDeleteInstance) return;
     await deleteMutation.mutateAsync({
-      id: instance.id,
-      deleteFiles,
+      id: pendingDeleteInstance.id,
+      deleteFiles: deleteInstanceFiles,
     });
 
-    if (selectedInstanceId === instance.id) {
+    if (selectedInstanceId === pendingDeleteInstance.id) {
       setSelectedInstance(null);
     }
-    if (editingInstance?.id === instance.id) {
+    if (editingInstance?.id === pendingDeleteInstance.id) {
       setEditingInstance(null);
     }
+    setPendingDeleteInstance(null);
+    setDeleteInstanceName("");
+    setDeleteInstanceFiles(false);
   };
 
   const description =
@@ -434,12 +427,63 @@ export function InstancesPage() {
                 queryClient.invalidateQueries({ queryKey: ["instances"] });
               }}
               onDelete={() => {
-                void handleDelete(instance);
+                confirmDelete(instance);
               }}
             />
           ))}
         </div>
       )}
+      <ConfirmDialog
+        open={pendingDeleteInstance !== null}
+        title="Delete instance"
+        description={`Type "${pendingDeleteInstance?.name ?? ""}" to confirm deletion.`}
+        confirmLabel={deleteInstanceFiles ? "Delete Instance and Files" : "Delete Instance"}
+        onConfirm={() => {
+          void handleDelete();
+        }}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingDeleteInstance(null);
+            setDeleteInstanceName("");
+            setDeleteInstanceFiles(false);
+          }
+        }}
+        confirmDisabled={
+          !pendingDeleteInstance ||
+          deleteInstanceName.trim() !== pendingDeleteInstance.name ||
+          deleteMutation.isPending
+        }
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-[var(--color-muted-foreground)]">
+            This removes the instance from the app. You can also choose to delete its files from disk.
+          </p>
+          <div className="space-y-2">
+            <Label htmlFor="delete-instance-name">Instance name</Label>
+            <Input
+              id="delete-instance-name"
+              value={deleteInstanceName}
+              onChange={(event) => setDeleteInstanceName(event.target.value)}
+              placeholder={pendingDeleteInstance?.name ?? ""}
+              autoFocus
+            />
+          </div>
+          <label className="flex items-start gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-muted)]/40 px-3 py-3 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 rounded border border-[var(--color-input)] bg-[var(--color-card)]"
+              checked={deleteInstanceFiles}
+              onChange={(event) => setDeleteInstanceFiles(event.target.checked)}
+            />
+            <span className="text-[var(--color-muted-foreground)]">
+              Also delete the instance files from disk at
+              <span className="mt-1 block break-all text-[var(--color-foreground)]">
+                {pendingDeleteInstance?.gameDir ?? ""}
+              </span>
+            </span>
+          </label>
+        </div>
+      </ConfirmDialog>
       <InstanceEditDialog
         instance={editingInstance}
         open={!!editingInstance}

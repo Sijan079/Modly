@@ -5,7 +5,8 @@ use serde::Deserialize;
 use crate::models::instance::Instance;
 use crate::models::mod_metadata::{LoaderKind, ModFile};
 use crate::models::updates::{
-    UpdateCandidate, UpdateFile, UpdateItemType, UpdateMatchConfidence, UpdateRow, UpdateStatus,
+    SuggestionVersionOption, UpdateCandidate, UpdateFile, UpdateItemType, UpdateMatchConfidence,
+    UpdateRow, UpdateStatus,
 };
 
 const MODRINTH_API: &str = "https://api.modrinth.com/v2";
@@ -79,6 +80,48 @@ impl Default for UpdateService {
 }
 
 impl UpdateService {
+    pub async fn compatible_versions_for_project(
+        &self,
+        project_id: &str,
+        mc_version: Option<&str>,
+        loader: Option<&str>,
+    ) -> Result<Vec<SuggestionVersionOption>> {
+        let versions = self.project_versions(project_id).await?;
+        let loader = loader.map(|value| value.to_ascii_lowercase());
+        let mut compatible = versions
+            .into_iter()
+            .filter(|version| {
+                mc_version
+                    .map(|mc| version.game_versions.iter().any(|value| value == mc))
+                    .unwrap_or(true)
+            })
+            .filter(|version| {
+                loader
+                    .as_deref()
+                    .filter(|value| *value != "unknown" && !value.is_empty())
+                    .map(|loader| {
+                        version
+                            .loaders
+                            .iter()
+                            .any(|value| value.eq_ignore_ascii_case(loader))
+                    })
+                    .unwrap_or(true)
+            })
+            .filter_map(|version| {
+                version.primary_file().map(|file| SuggestionVersionOption {
+                    version_id: version.id.clone(),
+                    version_number: version.version_number.clone(),
+                    download_url: file.url.clone(),
+                    file_name: file.filename.clone(),
+                    expected_sha256: file.hashes.sha256.clone(),
+                    release_date: version.date_published.clone(),
+                })
+            })
+            .collect::<Vec<_>>();
+        compatible.sort_by(|a, b| b.release_date.cmp(&a.release_date));
+        Ok(compatible)
+    }
+
     pub async fn check_instance(&self, instance: &Instance, mods: &[ModFile]) -> Vec<UpdateRow> {
         let mut rows = Vec::new();
         for item in mods {

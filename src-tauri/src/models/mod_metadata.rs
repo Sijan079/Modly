@@ -9,6 +9,7 @@ pub struct ModFile {
     pub instance_id: String,
     pub file_name: String,
     pub file_path: String,
+    pub installed_at: String,
     pub enabled: bool,
     pub hash_sha256: Option<String>,
     pub source_url: Option<String>,
@@ -85,6 +86,8 @@ pub struct ModMetadata {
     pub modrinth_url: Option<String>,
     pub dependencies: Vec<ModDependency>,
     pub loader: LoaderKind,
+    #[serde(default = "default_mod_side")]
+    pub side: ModSide,
     pub mod_id: Option<String>,
     #[serde(default)]
     pub installed_modrinth_version_id: Option<String>,
@@ -104,6 +107,7 @@ pub struct UpdateModMetadataInput {
     #[serde(default)]
     pub source_url: Option<String>,
     pub loader: LoaderKind,
+    pub side: ModSide,
     pub mod_id_field: Option<String>,
     #[serde(default)]
     pub installed_modrinth_version_id: Option<String>,
@@ -155,6 +159,10 @@ fn default_suggestion_enabled() -> bool {
     true
 }
 
+fn default_mod_side() -> ModSide {
+    ModSide::Unknown
+}
+
 /// Build a default Modrinth project URL from a mod slug/id.
 pub fn modrinth_url_from_id(mod_id: &str) -> String {
     let slug = mod_id.trim().trim_start_matches('/');
@@ -189,4 +197,13 @@ impl LoaderKind {
             _ => LoaderKind::Unknown,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ModSide {
+    Unknown,
+    Client,
+    Server,
+    Both,
 }

@@ -15,6 +15,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PageShell } from "@/components/layout/PageShell";
 import { PageSearchBar } from "@/components/layout/PageSearchBar";
 import { PageToolbar } from "@/components/layout/PageToolbar";
@@ -42,7 +43,9 @@ import type { ModFile, ModIntegrityAudit, ModIntegrityReport } from "@/lib/types
 const defaultFilters: ModListFilters = {
   categoryId: null,
   loader: "all",
+  side: "all",
   status: "all",
+  sort: "nameAsc",
 };
 
 export function ModsPage() {
@@ -65,6 +68,7 @@ export function ModsPage() {
   const [filters, setFilters] = useState<ModListFilters>(defaultFilters);
   const [dragOver, setDragOver] = useState(false);
   const [editingMod, setEditingMod] = useState<ModFile | null>(null);
+  const [pendingDeleteMod, setPendingDeleteMod] = useState<ModFile | null>(null);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [activeIntegrityAudit, setActiveIntegrityAudit] = useState<ModIntegrityAudit | null>(null);
   const [dismissedAuditAt, setDismissedAuditAt] = useState<string | null>(null);
@@ -85,6 +89,7 @@ export function ModsPage() {
   const hasActiveFilters =
     filters.categoryId !== null ||
     filters.loader !== "all" ||
+    filters.side !== "all" ||
     filters.status !== "all";
 
   const clearSearchAndFilters = () => {
@@ -149,6 +154,7 @@ export function ModsPage() {
       appliedSearch: modSearch,
       statusFilter: filters.status,
       loaderFilter: filters.loader,
+      sideFilter: filters.side,
       categoryFilter: activeCategory,
       totalCount: mods.length,
       mods: exportedMods,
@@ -188,20 +194,20 @@ export function ModsPage() {
     await handleExportModList();
   };
 
-  const handleDeleteMod = (mod: ModFile) => {
-    const displayName = mod.metadata?.name ?? mod.fileName;
-    const typedName = window.prompt(
-      `Delete "${displayName}"?\n\nThis removes the mod file from disk and clears its saved metadata.\nType the mod name to confirm.`
-    );
-    if (typedName !== displayName) return;
+  const confirmDeleteMod = (mod: ModFile) => {
+    setPendingDeleteMod(mod);
+  };
 
+  const handleDeleteMod = () => {
+    if (!pendingDeleteMod) return;
     deleteMutation.mutate(
-      { instanceId: mod.instanceId, modId: mod.id },
+      { instanceId: pendingDeleteMod.instanceId, modId: pendingDeleteMod.id },
       {
         onSuccess: () => {
-          if (editingMod?.id === mod.id) {
+          if (editingMod?.id === pendingDeleteMod.id) {
             setEditingMod(null);
           }
+          setPendingDeleteMod(null);
         },
       }
     );
@@ -351,9 +357,22 @@ export function ModsPage() {
               toggleMutation.mutate({ instanceId, modId, enabled });
             }
           }}
-          onDelete={handleDeleteMod}
+          onDelete={confirmDeleteMod}
         />
       </div>
+
+      <ConfirmDialog
+        open={pendingDeleteMod !== null}
+        title="Delete mod"
+        description={`Delete "${pendingDeleteMod?.metadata?.name ?? pendingDeleteMod?.fileName ?? ""}"?\n\nThis removes the mod file from disk and clears its saved metadata.`}
+        confirmLabel="Delete Mod"
+        onConfirm={handleDeleteMod}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingDeleteMod(null);
+          }
+        }}
+      />
 
       <ModEditDialog
         mod={editingMod}

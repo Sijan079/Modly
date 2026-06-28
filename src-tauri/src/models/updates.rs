@@ -104,3 +104,24 @@ pub struct UpdateModFromModrinthInput {
     pub file_name: String,
     pub expected_sha256: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SuggestionVersionOption {
+    pub version_id: String,
+    pub version_number: String,
+    pub download_url: String,
+    pub file_name: String,
+    pub expected_sha256: Option<String>,
+    pub release_date: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallSuggestionFromModrinthInput {
+    pub suggestion_id: String,
+    pub version_id: String,
+    pub download_url: String,
+    pub file_name: String,
+    pub expected_sha256: Option<String>,
+}

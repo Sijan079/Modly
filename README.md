@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  A desktop Minecraft instance and mod manager for organizing profiles, auditing mods, checking updates, and editing configuration files from one focused workspace.
+  A cleaner way to manage Minecraft instances, sort your mods, catch problems early, and keep everything in one place without the usual folder chaos.
 </p>
 
 <p align="center">
@@ -42,19 +42,18 @@
 
 ## Highlights
 
-- Create, duplicate, import, export, and organize Minecraft instances.
-- Scan mod folders and read metadata from Fabric, Forge, NeoForge, and legacy mod files.
-- Enable or disable mods without permanently deleting them.
-- Check Modrinth for compatible mod updates and update selected mods with backups.
-- Audit mod files for missing, unreadable, or corrupted archives.
-- Manage resource packs and shader packs alongside each instance.
-- Browse and edit configuration files from the built-in editor.
-- Review local activity logs and tune launcher settings.
+- Create, duplicate, import, export, and organize Minecraft instances your way.
+- Sort installed mods faster, tag them, and filter what matters in seconds.
+- Save mod ideas as suggestions, preview their source pages, and turn them into installed mods when you're ready.
+- Check for compatible updates and install them with less guesswork.
+- Catch broken or missing mod files before they ruin a play session.
+- Manage resource packs, shader packs, and configs alongside each instance.
+- Keep a simple local activity trail so it is easier to see what changed.
 
 ## Install
 
-Download the latest `.msi` installer from the [GitHub Releases](../../releases) page, run the installer, and launch **Modly**.
+Grab the latest `.msi` from the [GitHub Releases](../../releases) page, run it, and launch **Modly**.
 
 ## Local Data
 
-Modly stores its configuration and managed metadata locally on your device. Minecraft files remain in the instance folders you select.
+Modly keeps its settings and managed details on your device. Your Minecraft files stay in the instance folders you choose.

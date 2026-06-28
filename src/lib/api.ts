@@ -28,6 +28,8 @@ import type {
   UpdateModFromModrinthInput,
   UpdateRow,
   UpdateTarget,
+  SuggestionVersionOption,
+  InstallSuggestionFromModrinthInput,
 } from "./types";
 
 export const api = {
@@ -76,6 +78,8 @@ export const api = {
       invoke<void>("delete_mod", { modId }),
     deleteSuggestion: (id: string) =>
       invoke<void>("delete_mod_suggestion", { id }),
+    promoteSuggestion: (suggestionId: string) =>
+      invoke<ModFile>("promote_mod_suggestion", { suggestionId }),
     copyToInstance: (sourcePath: string, targetInstanceId: string) =>
       invoke<ModFile>("copy_mod_to_instance", { sourcePath, targetInstanceId }),
     exportHtml: (input: ExportModListInput) =>
@@ -120,6 +124,18 @@ export const api = {
       invoke<void>("confirm_update_match", { input }),
     updateMod: (input: UpdateModFromModrinthInput) =>
       invoke<ModFile>("update_mod_from_modrinth", { input }),
+    listSuggestionVersions: (
+      suggestionId: string,
+      gameVersion?: string | null,
+      loader?: string | null
+    ) =>
+      invoke<SuggestionVersionOption[]>("list_suggestion_modrinth_versions", {
+        suggestionId,
+        gameVersion: gameVersion ?? null,
+        loader: loader ?? null,
+      }),
+    installSuggestion: (input: InstallSuggestionFromModrinthInput) =>
+      invoke<ModFile>("install_suggestion_from_modrinth", { input }),
     log: (instanceId: string, level: string, message: string) =>
       invoke<void>("append_update_log", { instanceId, level, message }),
   },

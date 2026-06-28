@@ -5,7 +5,9 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use zip::ZipArchive;
 
-use crate::models::mod_metadata::{modrinth_url_from_id, LoaderKind, ModDependency, ModMetadata};
+use crate::models::mod_metadata::{
+    modrinth_url_from_id, LoaderKind, ModDependency, ModMetadata, ModSide,
+};
 
 pub fn parse_mod_jar(path: &Path) -> Result<ModMetadata> {
     let file = std::fs::File::open(path)
@@ -85,6 +87,7 @@ fn try_parse_fabric(archive: &mut ZipArchive<std::fs::File>) -> Result<Option<Mo
         modrinth_url: None,
         dependencies,
         loader: LoaderKind::Fabric,
+        side: ModSide::Unknown,
         mod_id: parsed.id,
         installed_modrinth_version_id: None,
         customized: false,
@@ -190,6 +193,7 @@ fn parse_mods_toml(content: &str, loader: LoaderKind) -> ModMetadata {
         modrinth_url: None,
         dependencies: vec![],
         loader,
+        side: ModSide::Unknown,
         mod_id,
         installed_modrinth_version_id: None,
         customized: false,
@@ -220,6 +224,7 @@ fn try_parse_legacy_mcmod(archive: &mut ZipArchive<std::fs::File>) -> Result<Opt
         modrinth_url: None,
         dependencies: vec![],
         loader: LoaderKind::Forge,
+        side: ModSide::Unknown,
         mod_id: m.modid,
         installed_modrinth_version_id: None,
         customized: false,
@@ -259,6 +264,7 @@ fn fallback_metadata(path: &Path) -> ModMetadata {
         modrinth_url: None,
         dependencies: vec![],
         loader,
+        side: ModSide::Unknown,
         mod_id: None,
         installed_modrinth_version_id: None,
         customized: false,

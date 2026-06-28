@@ -53,8 +53,9 @@ export function ModTable({
             <th className="w-20 px-4 py-3 text-left font-medium">Enabled</th>
             <th className="w-[36%] px-4 py-3 text-left font-medium">Name</th>
             <th className="w-[14%] px-4 py-3 text-left font-medium">Version</th>
-            <th className="w-[22%] px-4 py-3 text-left font-medium">Categories</th>
-            <th className="w-[14%] px-4 py-3 text-left font-medium">Loader</th>
+            <th className="w-[16%] px-4 py-3 text-left font-medium">Categories</th>
+            <th className="w-[10%] px-4 py-3 text-left font-medium">Loader</th>
+            <th className="w-[10%] px-4 py-3 text-left font-medium">Side</th>
             <th className="w-[10%] px-4 py-3 text-left font-medium">Link</th>
             <th className="w-14 px-4 py-3 text-left font-medium">
               <span className="sr-only">Actions</span>
@@ -110,6 +111,19 @@ export function ModTable({
                   </Badge>
                 ) : (
                   "-"
+                )}
+              </td>
+              <td className="px-4 py-3">
+                {mod.metadata?.side && mod.metadata.side !== "unknown" ? (
+                  <Badge variant="outline">
+                    {mod.metadata.side === "client"
+                      ? "Client"
+                      : mod.metadata.side === "server"
+                        ? "Server"
+                        : "Both"}
+                  </Badge>
+                ) : (
+                  <span className="text-[var(--color-muted-foreground)]">-</span>
                 )}
               </td>
               <td className="px-4 py-3">

@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { ExternalLink, Lightbulb, Plus, Save, Trash2, X } from "lucide-react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import { Ellipsis, ExternalLink, FolderOpen, Lightbulb, Pencil, Plus, Save, Trash2, X } from "lucide-react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   Dialog,
   DialogContent,
@@ -21,12 +24,22 @@ import { useCategories } from "@/hooks/useCategories";
 import { useInstances } from "@/hooks/useInstances";
 import {
   useDeleteModSuggestion,
+  useInstallSuggestion,
+  useMods,
   useModSuggestions,
+  usePromoteModSuggestion,
+  useSuggestionVersions,
   useUpsertModSuggestion,
 } from "@/hooks/useMods";
 import { filterMods, useAppStore, type ModListFilters } from "@/store/app";
-import type { InstanceCategory, ModLoaderKind, ModSuggestion } from "@/lib/types";
-import { formatLoader } from "@/lib/utils";
+import type {
+  InstanceCategory,
+  ModFile,
+  ModLoaderKind,
+  ModSuggestion,
+  SuggestionVersionOption,
+} from "@/lib/types";
+import { formatDate, formatLoader } from "@/lib/utils";
 import { normalizeSourceUrl, parseModSourceUrl } from "@/lib/mod-source-url";
 
 interface ModrinthProject {
@@ -42,11 +55,14 @@ interface ModrinthProject {
 }
 
 const LOADERS: ModLoaderKind[] = ["fabric", "forge", "neoforge", "quilt", "unknown"];
+const VERSION_LOADERS: Array<ModLoaderKind | ""> = ["", "fabric", "forge", "neoforge", "quilt"];
 
 const defaultFilters: ModListFilters = {
   categoryId: null,
   loader: "all",
+  side: "all",
   status: "all",
+  sort: "nameAsc",
 };
 
 const emptyDraft = {
@@ -54,24 +70,45 @@ const emptyDraft = {
   name: "",
   loader: "unknown" as ModLoaderKind,
   sourceUrl: "",
+  filePath: "",
   enabled: true,
   categoryIds: [] as string[],
 };
+
+type ToastState = {
+  id: number;
+  message: string;
+} | null;
 
 export function ModSuggestionsPage() {
   const { data: instances = [] } = useInstances();
   const { selectedInstanceId, setSelectedInstance } = useAppStore();
   const instanceId = selectedInstanceId ?? instances[0]?.id ?? null;
+  const selectedInstance = instances.find((instance) => instance.id === instanceId) ?? null;
+  const { data: mods = [] } = useMods(instanceId);
   const { data: suggestions = [], isLoading } = useModSuggestions(instanceId);
   const { data: categories = [] } = useCategories(instanceId);
   const upsertSuggestion = useUpsertModSuggestion();
   const deleteSuggestion = useDeleteModSuggestion();
+  const promoteSuggestion = usePromoteModSuggestion();
+  const suggestionVersions = useSuggestionVersions();
+  const installSuggestion = useInstallSuggestion();
 
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState<ModListFilters>(defaultFilters);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState(emptyDraft);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [pendingDeleteSuggestion, setPendingDeleteSuggestion] =
+    useState<ModSuggestion | null>(null);
+  const [installDialogOpen, setInstallDialogOpen] = useState(false);
+  const [installTarget, setInstallTarget] = useState<ModSuggestion | null>(null);
+  const [installLoader, setInstallLoader] = useState<ModLoaderKind | "">("");
+  const [installGameVersion, setInstallGameVersion] = useState("");
+  const [versionOptions, setVersionOptions] = useState<SuggestionVersionOption[]>([]);
+  const [selectedVersionId, setSelectedVersionId] = useState("");
+  const [installError, setInstallError] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastState>(null);
 
   const selectedSuggestion =
     suggestions.find((suggestion) => suggestion.id === selectedId) ?? null;
@@ -80,10 +117,129 @@ export function ModSuggestionsPage() {
     () => filterMods(suggestions, search, filters),
     [filters, search, suggestions]
   );
+  const suggestionMatches = useMemo(
+    () => buildSuggestionMatches(suggestions, mods),
+    [mods, suggestions]
+  );
+  const matchedSuggestionCount = suggestionMatches.size;
   const hasActiveFilters =
     filters.categoryId !== null ||
     filters.loader !== "all" ||
+    filters.side !== "all" ||
     filters.status !== "all";
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), 2600);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  const showToast = (message: string) => {
+    setToast({ id: Date.now(), message });
+  };
+
+  const openInstallDialog = async (suggestion: ModSuggestion) => {
+    const source = parseModSourceUrl(suggestion.sourceUrl);
+    if (source?.platform !== "modrinth") {
+      if (suggestion.filePath) {
+        if (!instanceId) return;
+        promoteSuggestion.mutate(
+          { instanceId, suggestionId: suggestion.id },
+          {
+            onSuccess: () => showToast("Suggestion installed."),
+          }
+        );
+        return;
+      }
+      setInstallTarget(suggestion);
+      setInstallLoader("");
+      setInstallGameVersion(selectedInstance?.mcVersion ?? "");
+      setVersionOptions([]);
+      setSelectedVersionId("");
+      setInstallError(
+        source?.platform === "curseforge"
+          ? "This suggestion points to CurseForge. Download from the source page first, attach the jar, then add it."
+          : "Add a Modrinth source URL or attach a local jar before installing this suggestion."
+      );
+      setInstallDialogOpen(true);
+      return;
+    }
+
+    const nextLoader =
+      suggestion.metadata?.loader && suggestion.metadata.loader !== "unknown"
+        ? suggestion.metadata.loader
+        : selectedInstance?.loader === "vanilla"
+          ? ""
+          : ((selectedInstance?.loader ?? "") as ModLoaderKind | "");
+    const nextGameVersion = selectedInstance?.mcVersion ?? "";
+
+    setInstallTarget(suggestion);
+    setInstallLoader(nextLoader);
+    setInstallGameVersion(nextGameVersion);
+    setInstallDialogOpen(true);
+    setInstallError(null);
+    setVersionOptions([]);
+    setSelectedVersionId("");
+
+    try {
+      const versions = await suggestionVersions.mutateAsync({
+        suggestionId: suggestion.id,
+        gameVersion: nextGameVersion || null,
+        loader: nextLoader || null,
+      });
+      setVersionOptions(versions);
+      setSelectedVersionId(versions[0]?.versionId ?? "");
+    } catch (error) {
+      setInstallError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const reloadInstallVersions = async () => {
+    if (!installTarget) return;
+    setInstallError(null);
+    setVersionOptions([]);
+    setSelectedVersionId("");
+
+    try {
+      const versions = await suggestionVersions.mutateAsync({
+        suggestionId: installTarget.id,
+        gameVersion: installGameVersion.trim() || null,
+        loader: installLoader || null,
+      });
+      setVersionOptions(versions);
+      setSelectedVersionId(versions[0]?.versionId ?? "");
+    } catch (error) {
+      setInstallError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const confirmInstallSuggestion = async () => {
+    if (!installTarget || !instanceId) return;
+    const chosen = versionOptions.find((option) => option.versionId === selectedVersionId);
+
+    if (chosen) {
+      await installSuggestion.mutateAsync({
+        suggestionId: installTarget.id,
+        versionId: chosen.versionId,
+        downloadUrl: chosen.downloadUrl,
+        fileName: chosen.fileName,
+        expectedSha256: chosen.expectedSha256,
+      });
+      showToast("Suggestion installed.");
+    } else if (installTarget.filePath) {
+      await promoteSuggestion.mutateAsync({ instanceId, suggestionId: installTarget.id });
+      showToast("Suggestion installed.");
+    } else {
+      setInstallError("Pick a compatible version or attach a local jar first.");
+      return;
+    }
+
+    setInstallDialogOpen(false);
+    setInstallTarget(null);
+    setInstallError(null);
+    setVersionOptions([]);
+    setSelectedVersionId("");
+  };
 
   const editSuggestion = (suggestion: ModSuggestion) => {
     setSelectedId(suggestion.id);
@@ -92,6 +248,7 @@ export function ModSuggestionsPage() {
       name: suggestion.metadata?.name ?? suggestion.fileName,
       loader: suggestion.metadata?.loader ?? "unknown",
       sourceUrl: suggestion.sourceUrl ?? "",
+      filePath: suggestion.filePath ?? "",
       enabled: suggestion.enabled,
       categoryIds: suggestion.categories.map((category) => category.id),
     });
@@ -112,6 +269,17 @@ export function ModSuggestionsPage() {
     setEditorOpen(true);
   };
 
+  const pickSuggestionFile = async () => {
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: "Mod JAR", extensions: ["jar"] }],
+    });
+
+    if (typeof selected === "string") {
+      setDraft((current) => ({ ...current, filePath: selected }));
+    }
+  };
+
   const saveDraft = () => {
     if (!instanceId) return;
     const normalizedUrl = normalizeSourceUrl(draft.sourceUrl);
@@ -123,7 +291,7 @@ export function ModSuggestionsPage() {
         id: draft.id,
         instanceId,
         fileName: name,
-        filePath: "",
+        filePath: draft.filePath.trim(),
         enabled: draft.enabled,
         hashSha256: null,
         sourceUrl: normalizedUrl || null,
@@ -139,25 +307,28 @@ export function ModSuggestionsPage() {
           setSelectedId(suggestion.id);
           resetDraft();
           setEditorOpen(false);
+          showToast(draft.id ? "Suggestion updated." : "Suggestion added.");
         },
       }
     );
   };
 
-  const deleteSelectedSuggestion = (suggestion: ModSuggestion) => {
+  const confirmDeleteSuggestion = (suggestion: ModSuggestion) => {
+    setPendingDeleteSuggestion(suggestion);
+  };
+
+  const deleteSelectedSuggestion = () => {
     if (!instanceId) return;
-    const displayName = suggestion.metadata?.name ?? suggestion.fileName;
-    const typedName = window.prompt(
-      `Delete "${displayName}" from suggestions?\n\nType the mod name to confirm.`
-    );
-    if (typedName !== displayName) return;
+    if (!pendingDeleteSuggestion) return;
     deleteSuggestion.mutate(
-      { instanceId, id: suggestion.id },
+      { instanceId, id: pendingDeleteSuggestion.id },
       {
         onSuccess: () => {
-          if (selectedId === suggestion.id) {
+          if (selectedId === pendingDeleteSuggestion.id) {
             setSelectedId(null);
           }
+          showToast("Suggestion deleted.");
+          setPendingDeleteSuggestion(null);
         },
       }
     );
@@ -176,7 +347,7 @@ export function ModSuggestionsPage() {
     <div className="flex flex-col gap-5">
       <PageShell
         title="Mod Suggestions"
-        description={`Stage mods to check or download later - ${filteredSuggestions.length} of ${suggestions.length} shown`}
+        description={`Stage mods to check or download later - ${filteredSuggestions.length} of ${suggestions.length} shown${matchedSuggestionCount > 0 ? ` · ${matchedSuggestionCount} already installed` : ""}`}
         controls={
           <>
             <select
@@ -216,6 +387,7 @@ export function ModSuggestionsPage() {
             instanceId={instanceId}
             onClear={clearSearchAndFilters}
             showClear={hasActiveFilters || search.trim().length > 0}
+            showSideFilter={false}
           />
         }
       />
@@ -228,13 +400,37 @@ export function ModSuggestionsPage() {
         }`}
       >
         <div className="flex min-w-0 flex-col gap-4">
+          {matchedSuggestionCount > 0 && (
+            <Card className="border-amber-500/40 bg-amber-500/5">
+              <CardContent className="flex items-center justify-between gap-3 p-4">
+                <div>
+                  <p className="text-sm font-medium text-[var(--color-foreground)]">
+                    {matchedSuggestionCount} suggestion{matchedSuggestionCount === 1 ? "" : "s"} already appear in this instance.
+                  </p>
+                  <p className="text-xs text-[var(--color-muted-foreground)]">
+                    Review the highlighted rows below and consider deleting the duplicate suggestions.
+                  </p>
+                </div>
+                <Badge variant="secondary">{matchedSuggestionCount} matched</Badge>
+              </CardContent>
+            </Card>
+          )}
           <SuggestionTable
             suggestions={filteredSuggestions}
+            suggestionMatches={suggestionMatches}
             loading={isLoading}
             selectedId={selectedId}
+            promotingId={
+              promoteSuggestion.isPending
+                ? promoteSuggestion.variables?.suggestionId ?? null
+                : installSuggestion.isPending
+                  ? installSuggestion.variables?.suggestionId ?? null
+                  : null
+            }
             onSelect={setSelectedId}
             onEdit={editSuggestion}
-            onDelete={deleteSelectedSuggestion}
+            onPromote={openInstallDialog}
+            onDelete={confirmDeleteSuggestion}
           />
         </div>
 
@@ -272,6 +468,19 @@ export function ModSuggestionsPage() {
           </Card>
         )}
       </div>
+
+      <ConfirmDialog
+        open={pendingDeleteSuggestion !== null}
+        title="Delete suggestion"
+        description={`Delete "${pendingDeleteSuggestion?.metadata?.name ?? pendingDeleteSuggestion?.fileName ?? ""}" from suggestions?`}
+        confirmLabel="Delete Suggestion"
+        onConfirm={deleteSelectedSuggestion}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingDeleteSuggestion(null);
+          }
+        }}
+      />
 
       <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
         <DialogContent className="max-w-lg">
@@ -319,6 +528,25 @@ export function ModSuggestionsPage() {
                 placeholder="https://modrinth.com/mod/... or https://curseforge.com/minecraft/mc-mods/..."
               />
             </Field>
+            <Field label="Downloaded file (optional)">
+              <div className="flex gap-2">
+                <Input
+                  value={draft.filePath}
+                  onChange={(event) =>
+                    setDraft((current) => ({ ...current, filePath: event.target.value }))
+                  }
+                  placeholder="C:\\path\\to\\mod.jar"
+                />
+                <Button type="button" variant="outline" onClick={pickSuggestionFile}>
+                  <FolderOpen className="h-4 w-4" />
+                  Browse
+                </Button>
+              </div>
+              <p className="text-xs text-[var(--color-muted-foreground)]">
+                Attach a downloaded jar now if you want this suggestion ready to add into the
+                instance.
+              </p>
+            </Field>
             <div className="space-y-2">
               <Label>Categories</Label>
               {categories.length === 0 ? (
@@ -361,6 +589,130 @@ export function ModSuggestionsPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <Dialog
+        open={installDialogOpen}
+        onOpenChange={(open) => {
+          setInstallDialogOpen(open);
+          if (!open) {
+            setInstallTarget(null);
+            setInstallError(null);
+            setVersionOptions([]);
+            setSelectedVersionId("");
+          }
+        }}
+      >
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Install suggestion</DialogTitle>
+            <DialogDescription>
+              {installTarget
+                ? `Choose a compatible file for ${installTarget.metadata?.name ?? installTarget.fileName}.`
+                : "Choose a compatible file."}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-4 py-2">
+            <Field label="Loader">
+              <select
+                className="flex h-9 w-full rounded-md border border-[var(--color-input)] bg-[var(--color-muted)] px-3 text-sm"
+                value={installLoader}
+                onChange={(event) => setInstallLoader(event.target.value as ModLoaderKind | "")}
+              >
+                <option value="">Any loader</option>
+                {VERSION_LOADERS.filter(Boolean).map((loader) => (
+                  <option key={loader} value={loader}>
+                    {formatLoader(loader)}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Minecraft version">
+              <div className="flex gap-2">
+                <Input
+                  value={installGameVersion}
+                  onChange={(event) => setInstallGameVersion(event.target.value)}
+                  placeholder="1.21.1"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={reloadInstallVersions}
+                  disabled={!installTarget || suggestionVersions.isPending}
+                >
+                  {suggestionVersions.isPending ? "Checking..." : "Check versions"}
+                </Button>
+              </div>
+            </Field>
+
+            {installError && (
+              <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-sm text-amber-100">
+                {installError}
+              </div>
+            )}
+
+            {versionOptions.length > 0 && (
+              <Field label="Available files">
+                <div className="max-h-64 space-y-2 overflow-auto rounded-md border border-[var(--color-border)] p-2">
+                  {versionOptions.map((option) => (
+                    <button
+                      key={option.versionId}
+                      type="button"
+                      onClick={() => setSelectedVersionId(option.versionId)}
+                      className={`w-full rounded-md border px-3 py-2 text-left transition ${
+                        selectedVersionId === option.versionId
+                          ? "border-[var(--color-primary)] bg-[var(--color-muted)]"
+                          : "border-[var(--color-border)] hover:bg-[var(--color-muted)]/60"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="font-medium text-[var(--color-foreground)]">
+                          {option.versionNumber}
+                        </span>
+                        <span className="text-xs text-[var(--color-muted-foreground)]">
+                          {formatDate(option.releaseDate)}
+                        </span>
+                      </div>
+                      <p className="mt-1 truncate text-xs text-[var(--color-muted-foreground)]">
+                        {option.fileName}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              </Field>
+            )}
+
+            {!versionOptions.length && installTarget?.filePath && (
+              <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-muted)]/40 px-3 py-2 text-sm text-[var(--color-muted-foreground)]">
+                No matching source file selected yet. You can still install using the attached jar.
+              </div>
+            )}
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setInstallDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void confirmInstallSuggestion()}
+              disabled={
+                !installTarget ||
+                promoteSuggestion.isPending ||
+                installSuggestion.isPending ||
+                (!selectedVersionId && !installTarget.filePath)
+              }
+            >
+              {promoteSuggestion.isPending || installSuggestion.isPending ? "Installing..." : "Install"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {toast && (
+        <div className="pointer-events-none fixed right-5 top-5 z-50 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-4 py-3 text-sm text-[var(--color-foreground)] shadow-xl">
+          {toast.message}
+        </div>
+      )}
     </div>
   );
 }
@@ -523,17 +875,23 @@ function formatCount(value?: number) {
 
 function SuggestionTable({
   suggestions,
+  suggestionMatches,
   loading,
   selectedId,
+  promotingId,
   onSelect,
   onEdit,
+  onPromote,
   onDelete,
 }: {
   suggestions: ModSuggestion[];
+  suggestionMatches: Map<string, ModFile>;
   loading: boolean;
   selectedId: string | null;
+  promotingId: string | null;
   onSelect: (id: string) => void;
   onEdit: (suggestion: ModSuggestion) => void;
+  onPromote: (suggestion: ModSuggestion) => void;
   onDelete: (suggestion: ModSuggestion) => void;
 }) {
   if (loading) {
@@ -562,7 +920,7 @@ function SuggestionTable({
             <th className="w-[18%] px-4 py-3 text-left font-medium">Loader</th>
             <th className="w-[26%] px-4 py-3 text-left font-medium">Categories</th>
             <th className="w-[12%] px-4 py-3 text-left font-medium">Source</th>
-            <th className="w-14 px-4 py-3 text-left font-medium">
+            <th className="w-32 px-5 py-3 text-left font-medium">
               <span className="sr-only">Actions</span>
             </th>
           </tr>
@@ -571,18 +929,29 @@ function SuggestionTable({
           {suggestions.map((suggestion) => {
             const source = parseModSourceUrl(suggestion.sourceUrl);
             const selected = suggestion.id === selectedId;
+            const matchedMod = suggestionMatches.get(suggestion.id) ?? null;
             return (
               <tr
                 key={suggestion.id}
                 className={`cursor-pointer border-b border-[var(--color-border)]/50 hover:bg-[var(--color-muted)]/50 ${
-                  selected ? "bg-[var(--color-muted)]/70" : ""
+                  matchedMod
+                    ? selected
+                      ? "bg-amber-500/15"
+                      : "bg-amber-500/5"
+                    : selected
+                      ? "bg-[var(--color-muted)]/70"
+                      : ""
                 }`}
                 onClick={() => onSelect(suggestion.id)}
-                onDoubleClick={() => onEdit(suggestion)}
               >
                 <td className="px-4 py-3 font-medium">
                   <div className="flex flex-col gap-1">
                     <span>{suggestion.metadata?.name ?? suggestion.fileName}</span>
+                    {matchedMod && (
+                      <span className="text-xs text-amber-300">
+                        Already installed as {matchedMod.metadata?.name ?? matchedMod.fileName}
+                      </span>
+                    )}
                   </div>
                 </td>
                 <td className="px-4 py-3">
@@ -604,22 +973,23 @@ function SuggestionTable({
                   </div>
                 </td>
                 <td className="px-4 py-3">
-                  {source ? <Badge>{source.label}</Badge> : "-"}
+                  <div className="flex flex-wrap gap-1">
+                    {source ? <Badge>{source.label}</Badge> : <span>-</span>}
+                    {matchedMod && (
+                      <Badge variant="secondary" className="bg-amber-500/15 text-amber-200">
+                        Recommend delete
+                      </Badge>
+                    )}
+                  </div>
                 </td>
-                <td className="px-4 py-3">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 text-[var(--color-muted-foreground)] hover:bg-[var(--color-destructive)]/10 hover:text-[var(--color-destructive)]"
-                    aria-label={`Delete ${suggestion.metadata?.name ?? suggestion.fileName}`}
-                    title="Delete suggestion"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onDelete(suggestion);
-                    }}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                <td className="px-5 py-3">
+                  <SuggestionActionsMenu
+                    suggestion={suggestion}
+                    busy={promotingId === suggestion.id}
+                    onEdit={onEdit}
+                    onPromote={onPromote}
+                    onDelete={onDelete}
+                  />
                 </td>
               </tr>
             );
@@ -628,4 +998,151 @@ function SuggestionTable({
       </table>
     </div>
   );
+}
+
+function SuggestionActionsMenu({
+  suggestion,
+  busy,
+  onEdit,
+  onPromote,
+  onDelete,
+}: {
+  suggestion: ModSuggestion;
+  busy: boolean;
+  onEdit: (suggestion: ModSuggestion) => void;
+  onPromote: (suggestion: ModSuggestion) => void;
+  onDelete: (suggestion: ModSuggestion) => void;
+}) {
+  const canInstall = !!suggestion.filePath || !!suggestion.sourceUrl;
+
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 text-[var(--color-muted-foreground)]"
+          aria-label={`Open actions for ${suggestion.metadata?.name ?? suggestion.fileName}`}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <Ellipsis className="h-4 w-4" />
+        </Button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          align="end"
+          sideOffset={6}
+          className="z-50 min-w-40 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] p-1 shadow-lg"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <ActionMenuItem
+            disabled={!canInstall || busy}
+            onSelect={() => onPromote(suggestion)}
+            icon={<Plus className="h-4 w-4" />}
+            label={busy ? "Installing..." : "Install"}
+          />
+          <ActionMenuItem
+            onSelect={() => onEdit(suggestion)}
+            icon={<Pencil className="h-4 w-4" />}
+            label="Edit"
+          />
+          <ActionMenuItem
+            onSelect={() => onDelete(suggestion)}
+            icon={<Trash2 className="h-4 w-4" />}
+            label="Delete"
+            destructive
+          />
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
+function ActionMenuItem({
+  disabled = false,
+  destructive = false,
+  onSelect,
+  icon,
+  label,
+}: {
+  disabled?: boolean;
+  destructive?: boolean;
+  onSelect: () => void;
+  icon: React.ReactNode;
+  label: string;
+}) {
+  return (
+    <DropdownMenu.Item
+      disabled={disabled}
+      onSelect={onSelect}
+      className={`flex cursor-default items-center gap-2 rounded px-3 py-2 text-sm outline-none transition ${
+        destructive
+          ? "text-[var(--color-destructive)] focus:bg-[var(--color-destructive)]/10"
+          : "text-[var(--color-foreground)] focus:bg-[var(--color-muted)]"
+      } data-[disabled]:pointer-events-none data-[disabled]:opacity-50`}
+    >
+      {icon}
+      <span>{label}</span>
+    </DropdownMenu.Item>
+  );
+}
+
+function buildSuggestionMatches(
+  suggestions: ModSuggestion[],
+  mods: ModFile[]
+): Map<string, ModFile> {
+  const byHash = new Map<string, ModFile>();
+  const byModId = new Map<string, ModFile>();
+  const byName = new Map<string, ModFile>();
+
+  for (const mod of mods) {
+    if (mod.hashSha256) {
+      byHash.set(mod.hashSha256.toLowerCase(), mod);
+    }
+    const modId = mod.metadata?.modId?.trim().toLowerCase();
+    if (modId) {
+      byModId.set(modId, mod);
+    }
+    const names = [mod.metadata?.name, mod.fileName].map(normalizeMatchText).filter(Boolean);
+    for (const name of names) {
+      if (!byName.has(name)) {
+        byName.set(name, mod);
+      }
+    }
+  }
+
+  const matches = new Map<string, ModFile>();
+  for (const suggestion of suggestions) {
+    const hash = suggestion.hashSha256?.toLowerCase();
+    if (hash && byHash.has(hash)) {
+      matches.set(suggestion.id, byHash.get(hash)!);
+      continue;
+    }
+
+    const modId = suggestion.metadata?.modId?.trim().toLowerCase();
+    if (modId && byModId.has(modId)) {
+      matches.set(suggestion.id, byModId.get(modId)!);
+      continue;
+    }
+
+    const names = [suggestion.metadata?.name, suggestion.fileName]
+      .map(normalizeMatchText)
+      .filter(Boolean);
+    const matched = names.find((name) => byName.has(name));
+    if (matched) {
+      matches.set(suggestion.id, byName.get(matched)!);
+    }
+  }
+
+  return matches;
+}
+
+function normalizeMatchText(value: string | null | undefined): string {
+  return (value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\.jar(\.disabled)?$/i, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }

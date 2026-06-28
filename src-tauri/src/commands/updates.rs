@@ -6,13 +6,23 @@ use uuid::Uuid;
 
 use crate::models::mod_metadata::{ModFile, UpdateModMetadataInput};
 use crate::models::updates::{
-    CheckUpdateTargetInput, ConfirmUpdateMatchInput, SavedUpdateCheck, UpdateItemType,
-    UpdateModFromModrinthInput, UpdateRow, UpdateTarget,
+    CheckUpdateTargetInput, ConfirmUpdateMatchInput, InstallSuggestionFromModrinthInput,
+    SavedUpdateCheck, SuggestionVersionOption, UpdateItemType, UpdateModFromModrinthInput,
+    UpdateRow, UpdateTarget,
 };
 use crate::services::hash_service::hash_file;
 use crate::services::mod_parser::parse_mod_jar;
-use crate::services::updates::{download_bytes, UpdateService};
+use crate::services::updates::{download_bytes, extract_modrinth_project_id, UpdateService};
 use crate::state::with_state;
+
+fn file_installed_at(path: &std::path::Path) -> Option<String> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let system_time = metadata
+        .created()
+        .ok()
+        .or_else(|| metadata.modified().ok())?;
+    Some(chrono::DateTime::<chrono::Utc>::from(system_time).to_rfc3339())
+}
 
 #[command]
 pub async fn check_updates(instance_id: String) -> Result<Vec<UpdateRow>, String> {
@@ -162,6 +172,10 @@ pub async fn confirm_update_match(input: ConfirmUpdateMatchInput) -> Result<(), 
                     .as_ref()
                     .map(|meta| meta.loader)
                     .unwrap_or(crate::models::mod_metadata::LoaderKind::Unknown),
+                side: metadata
+                    .as_ref()
+                    .map(|meta| meta.side)
+                    .unwrap_or(crate::models::mod_metadata::ModSide::Unknown),
                 mod_id_field: metadata.as_ref().and_then(|meta| meta.mod_id.clone()),
                 installed_modrinth_version_id: metadata
                     .as_ref()
@@ -251,6 +265,7 @@ pub async fn update_mod_from_modrinth(
             instance_id: existing.instance_id.clone(),
             file_name: safe_file_name,
             file_path: new_path.to_string_lossy().to_string(),
+            installed_at: file_installed_at(&new_path).unwrap_or(existing.installed_at),
             enabled: true,
             hash_sha256: hash_file(&new_path).ok(),
             source_url: existing.source_url,
@@ -277,6 +292,103 @@ pub async fn update_mod_from_modrinth(
             )
             .map_err(|e| e.to_string())?;
         Ok(saved)
+    })
+}
+
+#[command]
+pub async fn list_suggestion_modrinth_versions(
+    suggestion_id: String,
+    game_version: Option<String>,
+    loader: Option<String>,
+) -> Result<Vec<SuggestionVersionOption>, String> {
+    let source_url = with_state(|state| {
+        let suggestion = state
+            .db
+            .get_mod_suggestion_by_id(&suggestion_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Suggestion not found".to_string())?;
+        suggestion
+            .source_url
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| "Suggestion has no source URL".to_string())
+    })?;
+
+    if !source_url.contains("modrinth.com") {
+        return Err("Only Modrinth suggestion downloads are supported right now.".to_string());
+    }
+
+    let project_id = extract_modrinth_project_id(&source_url)
+        .ok_or_else(|| "Could not read Modrinth project from source URL".to_string())?;
+    let versions = UpdateService::default()
+        .compatible_versions_for_project(&project_id, game_version.as_deref(), loader.as_deref())
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if versions.is_empty() {
+        return Err("No matching Modrinth files were found for that loader/version.".to_string());
+    }
+
+    Ok(versions)
+}
+
+#[command]
+pub async fn install_suggestion_from_modrinth(
+    input: InstallSuggestionFromModrinthInput,
+) -> Result<ModFile, String> {
+    let bytes = download_bytes(&input.download_url)
+        .await
+        .map_err(|e| e.to_string())?;
+    if let Some(expected) = input.expected_sha256.as_deref() {
+        let actual = format!("{:x}", Sha256::digest(&bytes));
+        if !actual.eq_ignore_ascii_case(expected) {
+            return Err("Downloaded file did not match expected SHA-256 hash.".to_string());
+        }
+    }
+
+    with_state(|state| {
+        let suggestion = state
+            .db
+            .get_mod_suggestion_by_id(&input.suggestion_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Suggestion not found".to_string())?;
+        let instance = state
+            .db
+            .get_instance(&suggestion.instance_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Instance not found".to_string())?;
+        let mods_dir = Path::new(&instance.game_dir).join("mods");
+        std::fs::create_dir_all(&mods_dir).map_err(|e| e.to_string())?;
+
+        let safe_file_name = sanitize_file_name(&input.file_name);
+        let dest = mods_dir.join(&safe_file_name);
+        let temp = mods_dir.join(format!("{safe_file_name}.download"));
+        std::fs::write(&temp, &bytes).map_err(|e| e.to_string())?;
+        std::fs::rename(&temp, &dest).map_err(|e| e.to_string())?;
+
+        let metadata = suggestion.metadata.clone().or_else(|| parse_mod_jar(&dest).ok());
+        let mod_file = ModFile {
+            id: Uuid::new_v4().to_string(),
+            instance_id: suggestion.instance_id.clone(),
+            file_name: safe_file_name,
+            file_path: dest.to_string_lossy().to_string(),
+            installed_at: file_installed_at(&dest).unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+            enabled: true,
+            hash_sha256: hash_file(&dest).ok(),
+            source_url: suggestion.source_url.clone(),
+            metadata,
+            categories: suggestion.categories.clone(),
+        };
+
+        state.db.upsert_mod(&mod_file).map_err(|e| e.to_string())?;
+        state
+            .db
+            .delete_mod_suggestion(&input.suggestion_id)
+            .map_err(|e| e.to_string())?;
+        state
+            .db
+            .get_mod_by_path(&suggestion.instance_id, &mod_file.file_path)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Installed mod not found after save".to_string())
     })
 }
 

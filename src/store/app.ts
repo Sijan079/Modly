@@ -1,13 +1,16 @@
 import { create } from "zustand";
-import type { Instance, ModFile, ModLoaderKind } from "@/lib/types";
+import type { Instance, ModFile, ModLoaderKind, ModSide } from "@/lib/types";
 import { formatLoader } from "@/lib/utils";
 
 export type ModStatusFilter = "all" | "enabled" | "disabled";
+export type ModSortOption = "nameAsc" | "nameDesc" | "installedNewest" | "installedOldest";
 
 export interface ModListFilters {
   categoryId: string | null;
   loader: ModLoaderKind | "all";
+  side: ModSide | "all";
   status: ModStatusFilter;
+  sort: ModSortOption;
 }
 
 interface AppStore {
@@ -72,6 +75,10 @@ export function filterMods(
     result = result.filter((m) => m.metadata?.loader === filters.loader);
   }
 
+  if (filters.side !== "all") {
+    result = result.filter((m) => (m.metadata?.side ?? "unknown") === filters.side);
+  }
+
   if (filters.categoryId) {
     result = result.filter((m) =>
       m.categories.some((c) => c.id === filters.categoryId)
@@ -83,5 +90,38 @@ export function filterMods(
     result = result.filter((m) => modSearchText(m).includes(q));
   }
 
-  return result;
+  return [...result].sort((a, b) => compareMods(a, b, filters.sort));
+}
+
+function compareMods(a: ModFile, b: ModFile, sort: ModSortOption): number {
+  switch (sort) {
+    case "nameDesc":
+      return compareText(modDisplayName(b), modDisplayName(a));
+    case "installedNewest":
+      return compareInstalledAt(b, a);
+    case "installedOldest":
+      return compareInstalledAt(a, b);
+    case "nameAsc":
+    default:
+      return compareText(modDisplayName(a), modDisplayName(b));
+  }
+}
+
+function modDisplayName(mod: ModFile): string {
+  return mod.metadata?.name ?? mod.fileName;
+}
+
+function compareText(a: string, b: string): number {
+  return a.localeCompare(b, undefined, { sensitivity: "base" });
+}
+
+function compareInstalledAt(a: ModFile, b: ModFile): number {
+  const aTime = Date.parse(a.installedAt);
+  const bTime = Date.parse(b.installedAt);
+  const safeATime = Number.isNaN(aTime) ? 0 : aTime;
+  const safeBTime = Number.isNaN(bTime) ? 0 : bTime;
+  if (safeATime !== safeBTime) {
+    return safeATime - safeBTime;
+  }
+  return compareText(modDisplayName(a), modDisplayName(b));
 }
