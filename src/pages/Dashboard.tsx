@@ -28,6 +28,7 @@ import { usePacks } from "@/hooks/usePacks";
 import { useAppStore } from "@/store/app";
 import { api } from "@/lib/api";
 import { buildExportDefaultPath } from "@/lib/export-paths";
+import { getResolvedConfigPath } from "@/lib/instance-paths";
 import { formatDate, formatLoader } from "@/lib/utils";
 import type {
   ConfigTreeNode,
@@ -52,7 +53,11 @@ export function DashboardPage() {
   const { data: latestIntegrityAudit = null } = useLatestModIntegrityAudit(instanceId);
   const { data: resourcePacks = [] } = usePacks(instanceId, "resourcePack");
   const { data: shaderPacks = [] } = usePacks(instanceId, "shaderPack");
+  const { data: datapacks = [] } = usePacks(instanceId, "datapack");
   const integrityMutation = useCheckModIntegrity();
+  const resolvedConfigPath = selectedInstance
+    ? getResolvedConfigPath(selectedInstance)
+    : null;
 
   const { data: scanSummary, isFetching: checkingFolders } = useQuery({
     queryKey: ["dashboard-scan-summary", selectedInstance?.gameDir],
@@ -62,9 +67,9 @@ export function DashboardPage() {
   });
 
   const { data: configTree = [] } = useQuery({
-    queryKey: ["dashboard-config-tree", selectedInstance?.gameDir],
-    queryFn: () => api.configs.scanTree(selectedInstance!.gameDir),
-    enabled: !!selectedInstance,
+    queryKey: ["dashboard-config-tree", resolvedConfigPath],
+    queryFn: () => api.configs.scanTree(resolvedConfigPath!),
+    enabled: !!resolvedConfigPath,
     staleTime: 60_000,
   });
 
@@ -81,7 +86,8 @@ export function DashboardPage() {
         api.mods.scan(instance.id),
         api.packs.scan(instance.id, "resourcePack"),
         api.packs.scan(instance.id, "shaderPack"),
-        api.configs.scanTree(instance.gameDir),
+        api.packs.scan(instance.id, "datapack"),
+        api.configs.scanTree(getResolvedConfigPath(instance)),
         api.scan.path(instance.gameDir),
       ]);
       if (settings.autoAuditAfterScan) {
@@ -97,7 +103,7 @@ export function DashboardPage() {
           queryKey: ["dashboard-scan-summary", instance.gameDir],
         }),
         queryClient.invalidateQueries({
-          queryKey: ["dashboard-config-tree", instance.gameDir],
+          queryKey: ["dashboard-config-tree", getResolvedConfigPath(instance)],
         }),
         queryClient.invalidateQueries({
           queryKey: ["mod-integrity-audit", instance.id],
@@ -124,8 +130,15 @@ export function DashboardPage() {
 
   const recentActivity = useMemo(() => logs.slice(0, 10), [logs]);
   const planningStats = useMemo(
-    () => getPlanningStats(mods, resourcePacks.length, shaderPacks.length, configTree),
-    [mods, resourcePacks.length, shaderPacks.length, configTree]
+    () =>
+      getPlanningStats(
+        mods,
+        resourcePacks.length,
+        shaderPacks.length,
+        datapacks.length,
+        configTree
+      ),
+    [mods, resourcePacks.length, shaderPacks.length, datapacks.length, configTree]
   );
   const attentionItems = useMemo(
     () =>
@@ -172,8 +185,12 @@ export function DashboardPage() {
                 </p>
                 <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                   <Metric label="Mods" value={mods.length} detail={`${planningStats.enabledMods} enabled`} />
-                  <Metric label="Resource Packs" value={resourcePacks.length} />
+                  <Metric
+                    label="DSR Packs"
+                    value={resourcePacks.length + shaderPacks.length + datapacks.length}
+                  />
                   <Metric label="Shader Packs" value={shaderPacks.length} />
+                  <Metric label="Datapacks" value={datapacks.length} />
                   <Metric label="Config Files" value={planningStats.configCount} />
                 </div>
               </div>
@@ -285,8 +302,8 @@ export function DashboardPage() {
                 <BreakdownItem
                   icon={Image}
                   label="Visual Add-ons"
-                  value={resourcePacks.length + shaderPacks.length}
-                  total={resourcePacks.length + shaderPacks.length + mods.length}
+                  value={resourcePacks.length + shaderPacks.length + datapacks.length}
+                  total={resourcePacks.length + shaderPacks.length + datapacks.length + mods.length}
                 />
               </CardContent>
             </Card>
@@ -431,6 +448,7 @@ function getPlanningStats(
   mods: ModFile[],
   resourcePackCount: number,
   shaderPackCount: number,
+  datapackCount: number,
   configTree: ConfigTreeNode[]
 ) {
   const fileNames = new Map<string, number>();
@@ -446,6 +464,7 @@ function getPlanningStats(
     duplicateFiles: Array.from(fileNames.values()).filter((count) => count > 1).length,
     resourcePackCount,
     shaderPackCount,
+    datapackCount,
     configCount: countConfigFiles(configTree),
   };
 }

@@ -1,5 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { PageSearchBar } from "@/components/layout/PageSearchBar";
 import { PageShell } from "@/components/layout/PageShell";
@@ -13,6 +13,7 @@ import {
   useUpdatePackMetadata,
 } from "@/hooks/usePacks";
 import { api } from "@/lib/api";
+import { getResolvedPackPath } from "@/lib/instance-paths";
 import type { DirectoryEntry, PackItem, PackType } from "@/lib/types";
 import { useAppStore } from "@/store/app";
 
@@ -34,20 +35,21 @@ export function ResourcePacksPage() {
   const { data: packs = [] } = usePacks(instanceId, packTypeFilter);
   const updatePackMutation = useUpdatePackMetadata();
 
-  const { data: scan, refetch, isFetching } = useQuery({
-    queryKey: ["scan-resourcepacks", instanceId, selectedInstance?.gameDir],
-    queryFn: () => api.scan.path(selectedInstance!.gameDir),
-    enabled: !!selectedInstance?.gameDir,
-  });
+  const resolvedPackPath = selectedInstance
+    ? getResolvedPackPath(selectedInstance, packTypeFilter)
+    : null;
 
-  const pathKind =
-    packTypeFilter === "resourcePack" ? "resourcePacks" : "shaderPacks";
-  const packPath = scan?.detectedPaths.find((path) => path.kind === pathKind);
-
-  const { data: fileEntries = [] } = useQuery({
-    queryKey: ["pack-files", packPath?.path],
-    queryFn: () => (packPath?.path ? api.files.listDirectory(packPath.path) : []),
-    enabled: !!packPath?.path,
+  const { data: fileEntries = [], refetch, isFetching } = useQuery({
+    queryKey: ["pack-files", resolvedPackPath],
+    queryFn: async () => {
+      if (!resolvedPackPath) return [];
+      try {
+        return await api.files.listDirectory(resolvedPackPath);
+      } catch {
+        return [];
+      }
+    },
+    enabled: !!resolvedPackPath,
   });
 
   const listRows = useMemo<DisplayRow[]>(() => {
@@ -90,18 +92,28 @@ export function ResourcePacksPage() {
   }, [listRows, search]);
 
   const listTitle =
-    packTypeFilter === "resourcePack" ? "Resource Packs" : "Shader Packs";
+    packTypeFilter === "resourcePack"
+      ? "Resource Packs"
+      : packTypeFilter === "shaderPack"
+        ? "Shader Packs"
+        : "Datapacks";
+  const packLabel =
+    packTypeFilter === "resourcePack"
+      ? "resource"
+      : packTypeFilter === "shaderPack"
+        ? "shader"
+        : "data";
   const emptyMessage = selectedInstance
     ? search.trim()
-      ? `No ${packTypeFilter === "resourcePack" ? "resource" : "shader"} packs match your search.`
-      : `No ${packTypeFilter === "resourcePack" ? "resource" : "shader"} packs found for this instance.`
-    : `Select an instance to view its ${packTypeFilter === "resourcePack" ? "resource" : "shader"} packs.`;
+      ? `No ${packLabel} packs match your search.`
+      : `No ${packLabel} packs found for this instance.`
+    : `Select an instance to view its ${packLabel} packs.`;
 
   return (
     <div className="flex flex-col gap-5">
       <PageShell
-        title="Resource Packs"
-        description="Browse, toggle, and organize resource packs and shader packs per instance"
+        title="DSR Packs"
+        description="Browse, toggle, and organize data, shader, and resource pack content per instance"
         controls={
           <>
             <select
@@ -150,7 +162,7 @@ export function ResourcePacksPage() {
         rows={filteredRows}
         packTypeFilter={packTypeFilter}
         instanceId={instanceId}
-        loading={isFetching && !packPath?.path}
+        loading={isFetching && !resolvedPackPath}
         onSelectType={setPackTypeFilter}
         onEditItem={setEditingItem}
         emptyMessage={emptyMessage}
@@ -230,6 +242,12 @@ function PackListPanel({
           >
             Shader Packs
           </RibbonTab>
+          <RibbonTab
+            active={packTypeFilter === "datapack"}
+            onClick={() => onSelectType("datapack")}
+          >
+            Datapacks
+          </RibbonTab>
         </div>
       </div>
 
@@ -297,7 +315,7 @@ function PackTable({
       <div className="flex h-48 flex-col items-center justify-center gap-2 text-[var(--color-muted-foreground)]">
         <p>{emptyMessage}</p>
         <p className="text-xs">
-          Toggle between tabs or refresh after scanning the instance folders.
+          Toggle between pack types or refresh after scanning the instance folders.
         </p>
       </div>
     );

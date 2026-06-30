@@ -16,6 +16,8 @@ pub struct ModFile {
     pub metadata: Option<ModMetadata>,
     #[serde(default)]
     pub categories: Vec<InstanceCategory>,
+    #[serde(default)]
+    pub related_mods: Vec<UpdateModRelationshipInput>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,6 +114,8 @@ pub struct UpdateModMetadataInput {
     #[serde(default)]
     pub installed_modrinth_version_id: Option<String>,
     pub category_ids: Vec<String>,
+    #[serde(default)]
+    pub related_mods: Vec<UpdateModRelationshipInput>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,6 +131,8 @@ pub struct ModSuggestion {
     pub metadata: Option<ModMetadata>,
     #[serde(default)]
     pub categories: Vec<InstanceCategory>,
+    #[serde(default)]
+    pub related_mods: Vec<UpdateModRelationshipInput>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -175,6 +181,57 @@ pub struct ModDependency {
     pub mod_id: String,
     pub version_range: Option<String>,
     pub kind: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ModRelationshipType {
+    Dependency,
+    AddonFor,
+}
+
+impl ModRelationshipType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ModRelationshipType::Dependency => "dependency",
+            ModRelationshipType::AddonFor => "addon_for",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "addon_for" => ModRelationshipType::AddonFor,
+            _ => ModRelationshipType::Dependency,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateModRelationshipInput {
+    pub target_mod_id: String,
+    pub relationship_type: ModRelationshipType,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModRelationshipEdge {
+    pub id: String,
+    pub instance_id: String,
+    pub source_mod_id: String,
+    pub source_mod_name: String,
+    pub target_mod_id: String,
+    pub target_mod_name: String,
+    pub relationship_type: ModRelationshipType,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModRelationshipsForMod {
+    pub mod_id: String,
+    pub outgoing: Vec<ModRelationshipEdge>,
+    pub incoming: Vec<ModRelationshipEdge>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

@@ -19,9 +19,10 @@ use commands::launcher::{
 };
 use commands::mods::{
     check_mod_integrity, copy_mod_to_instance, delete_mod, delete_mod_suggestion,
-    export_mod_list_html, get_latest_mod_integrity_audit, list_mod_suggestions, list_mods,
-    parse_mod_metadata, promote_mod_suggestion, reset_mod_metadata, scan_instance_mods, set_mod_enabled,
-    toggle_mod_enabled, update_mod_metadata, upsert_mod_suggestion,
+    export_mod_list_html, get_latest_mod_integrity_audit, list_mod_relationships,
+    list_mod_suggestions, list_mods, parse_mod_metadata, promote_mod_suggestion,
+    reset_mod_metadata, scan_instance_mods, set_mod_enabled, toggle_mod_enabled,
+    update_mod_metadata, upsert_mod_suggestion,
 };
 use commands::packs::{
     list_pack_items, scan_pack_items, toggle_pack_item_enabled, update_pack_item_metadata,
@@ -75,6 +76,7 @@ pub fn run() {
             delete_mod,
             delete_mod_suggestion,
             update_mod_metadata,
+            list_mod_relationships,
             upsert_mod_suggestion,
             reset_mod_metadata,
             promote_mod_suggestion,

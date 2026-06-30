@@ -30,6 +30,7 @@ pub fn scan_minecraft_directory(root: &Path) -> Result<MinecraftScanResult> {
         ("mods", PathKind::Mods),
         ("resourcepacks", PathKind::ResourcePacks),
         ("shaderpacks", PathKind::ShaderPacks),
+        ("datapacks", PathKind::Datapacks),
         ("saves", PathKind::Saves),
         ("versions", PathKind::Versions),
     ];
@@ -42,6 +43,7 @@ pub fn scan_minecraft_directory(root: &Path) -> Result<MinecraftScanResult> {
                 PathKind::Mods => content.mod_count = count,
                 PathKind::ResourcePacks => content.resource_pack_count = count,
                 PathKind::ShaderPacks => content.shader_pack_count = count,
+                PathKind::Datapacks => content.datapack_count = count,
                 PathKind::Saves => content.save_count = count,
                 _ => {}
             }
@@ -191,4 +193,28 @@ fn extract_version_from_filename(name: &str) -> Option<String> {
     name.split('-')
         .last()
         .map(|s| s.trim_end_matches(".jar").to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scan_minecraft_directory;
+    use std::fs;
+    use uuid::Uuid;
+
+    #[test]
+    fn detects_datapacks_folder_and_counts_entries() {
+        let root = std::env::temp_dir().join(format!("modly-scan-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(root.join("datapacks")).expect("datapacks dir should exist");
+        fs::write(root.join("datapacks").join("example.zip"), b"zip").expect("file should exist");
+
+        let result = scan_minecraft_directory(&root).expect("scan should succeed");
+
+        assert_eq!(result.content.datapack_count, 1);
+        assert!(result
+            .detected_paths
+            .iter()
+            .any(|path| matches!(path.kind, crate::models::scan::PathKind::Datapacks)));
+
+        fs::remove_dir_all(root).expect("temp dir should be removed");
+    }
 }

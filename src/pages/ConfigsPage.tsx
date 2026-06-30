@@ -8,6 +8,7 @@ import { ConfigTree } from "@/components/configs/ConfigTree";
 import { FileTabs } from "@/components/configs/FileTabs";
 import { useInstances } from "@/hooks/useInstances";
 import { api } from "@/lib/api";
+import { getResolvedConfigPath } from "@/lib/instance-paths";
 import type { ConfigTreeNode } from "@/lib/types";
 import { useAppStore } from "@/store/app";
 import { useConfigsStore } from "@/store/configsStore";
@@ -35,11 +36,14 @@ export default function ConfigsPage() {
     () => filterConfigTree(configTree, configSearch),
     [configTree, configSearch]
   );
+  const resolvedConfigPath = selectedInstance
+    ? getResolvedConfigPath(selectedInstance)
+    : null;
 
   const scanConfigs = async () => {
-    if (!selectedInstance) return;
+    if (!resolvedConfigPath) return;
     try {
-      const tree = await api.configs.scanTree(selectedInstance.gameDir);
+      const tree = await api.configs.scanTree(resolvedConfigPath);
       setConfigTree(tree);
     } catch (e) {
       console.error(e);
@@ -50,7 +54,7 @@ export default function ConfigsPage() {
   useEffect(() => {
     reset();
     void scanConfigs();
-  }, [selectedInstance?.gameDir]);
+  }, [resolvedConfigPath]);
 
   return (
     <div className="flex h-full min-h-[calc(100vh-3rem)] flex-col gap-5">
@@ -90,7 +94,7 @@ export default function ConfigsPage() {
           <div className="border-b border-[var(--color-border)] px-4 py-3">
             <h2 className="text-sm font-medium">Config Files</h2>
             <p className="mt-1 truncate text-xs text-[var(--color-muted-foreground)]">
-              {selectedInstance?.gameDir ?? "Select an instance"}
+              {resolvedConfigPath ?? "Select an instance"}
             </p>
             <PageSearchBar
               value={configSearch}

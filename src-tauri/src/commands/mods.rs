@@ -10,7 +10,7 @@ use zip::ZipArchive;
 
 use crate::models::mod_metadata::{
     ModFile, ModIntegrityAudit, ModIntegrityAuditStatus, ModIntegrityReport, ModIntegrityStatus,
-    ModSuggestion, UpdateModMetadataInput, UpsertModSuggestionInput,
+    ModRelationshipsForMod, ModSuggestion, UpdateModMetadataInput, UpsertModSuggestionInput,
 };
 use crate::services::hash_service::hash_file;
 use crate::services::mod_parser::parse_mod_jar;
@@ -93,6 +93,10 @@ pub async fn scan_instance_mods(instance_id: String) -> Result<Vec<ModFile>, Str
                 categories: existing
                     .as_ref()
                     .map(|m| m.categories.clone())
+                    .unwrap_or_default(),
+                related_mods: existing
+                    .as_ref()
+                    .map(|m| m.related_mods.clone())
                     .unwrap_or_default(),
             };
 
@@ -369,6 +373,16 @@ pub async fn update_mod_metadata(input: UpdateModMetadataInput) -> Result<ModFil
 }
 
 #[command]
+pub async fn list_mod_relationships(mod_id: String) -> Result<ModRelationshipsForMod, String> {
+    with_state(|state| {
+        state
+            .db
+            .get_mod_relationships(&mod_id)
+            .map_err(|e| e.to_string())
+    })
+}
+
+#[command]
 pub async fn reset_mod_metadata(mod_id: String) -> Result<ModFile, String> {
     with_state(|state| {
         let existing = state
@@ -429,6 +443,7 @@ pub async fn copy_mod_to_instance(
             source_url: None,
             metadata,
             categories: vec![],
+            related_mods: vec![],
         };
 
         state.db.upsert_mod(&mod_file).map_err(|e| e.to_string())?;
@@ -480,6 +495,7 @@ pub async fn promote_mod_suggestion(suggestion_id: String) -> Result<ModFile, St
             source_url: suggestion.source_url.clone(),
             metadata,
             categories: suggestion.categories.clone(),
+            related_mods: vec![],
         };
 
         state.db.upsert_mod(&mod_file).map_err(|e| e.to_string())?;

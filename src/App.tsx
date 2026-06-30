@@ -5,6 +5,7 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import { DashboardPage } from "@/pages/Dashboard";
 import { InstancesPage } from "@/pages/Instances";
 import { ModsPage } from "@/pages/Mods";
+import { RelationshipsPage } from "@/pages/Dependencies";
 import { ModSuggestionsPage } from "@/pages/ModSuggestions";
 import { ResourcePacksPage } from "@/pages/ResourcePacks";
 import { UpdatesPage } from "@/pages/Updates";
@@ -32,6 +33,7 @@ export default function App() {
               <Route path="/" element={<DashboardPage />} />
               <Route path="/instances" element={<InstancesPage />} />
               <Route path="/mods" element={<ModsPage />} />
+              <Route path="/dependencies" element={<RelationshipsPage />} />
               <Route path="/mod-suggestions" element={<ModSuggestionsPage />} />
               <Route path="/resource-packs" element={<ResourcePacksPage />} />
               <Route path="/updates" element={<UpdatesPage />} />
@@ -96,6 +98,10 @@ function StartupGate({ children }: { children: React.ReactNode }) {
           queryClient.prefetchQuery({
             queryKey: ["packs", firstInstance.id, "shaderPack"],
             queryFn: () => api.packs.list(firstInstance.id, "shaderPack"),
+          }),
+          queryClient.prefetchQuery({
+            queryKey: ["packs", firstInstance.id, "datapack"],
+            queryFn: () => api.packs.list(firstInstance.id, "datapack"),
           }),
         ]);
       }

@@ -6,12 +6,15 @@ use rusqlite::{params, Connection};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::models::category::{CreateCategoryInput, InstanceCategory};
+use crate::models::category::{
+    CreateCategoryInput, DeleteCategoryInput, DeleteCategoryMode, InstanceCategory,
+};
 use crate::models::instance::{CreateInstanceInput, Instance, LoaderType, UpdateInstanceInput};
 use crate::models::launch::LaunchConfig;
 use crate::models::mod_metadata::{
     ModFile, ModIntegrityAudit, ModIntegrityAuditStatus, ModIntegrityReport, ModMetadata,
-    ModSide, ModSuggestion, UpdateModMetadataInput, UpsertModSuggestionInput,
+    ModRelationshipEdge, ModRelationshipType, ModRelationshipsForMod, ModSide, ModSuggestion,
+    UpdateModMetadataInput, UpdateModRelationshipInput, UpsertModSuggestionInput,
 };
 use crate::models::pack_item::{PackItem, PackItemMetadata, PackType, UpdatePackItemMetadataInput};
 use crate::models::settings::AppSettings;
@@ -29,6 +32,10 @@ CREATE TABLE IF NOT EXISTS instances (
     loader TEXT NOT NULL DEFAULT 'unknown',
     mc_version TEXT,
     icon TEXT,
+    resource_packs_path TEXT,
+    shader_packs_path TEXT,
+    data_packs_path TEXT,
+    config_path TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -100,6 +107,16 @@ CREATE TABLE IF NOT EXISTS mod_suggestion_category_tags (
     PRIMARY KEY (suggestion_id, category_id)
 );
 
+CREATE TABLE IF NOT EXISTS mod_relationships (
+    id TEXT PRIMARY KEY NOT NULL,
+    instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+    source_mod_id TEXT NOT NULL REFERENCES mods(id) ON DELETE CASCADE,
+    target_mod_id TEXT NOT NULL REFERENCES mods(id) ON DELETE CASCADE,
+    relationship_type TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(source_mod_id, target_mod_id)
+);
+
 CREATE TABLE IF NOT EXISTS pack_items (
     id TEXT PRIMARY KEY NOT NULL,
     instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
@@ -132,6 +149,8 @@ CREATE TABLE IF NOT EXISTS update_checks (
 CREATE INDEX IF NOT EXISTS idx_mods_instance ON mods(instance_id);
 CREATE INDEX IF NOT EXISTS idx_mod_suggestions_instance ON mod_suggestions(instance_id);
 CREATE INDEX IF NOT EXISTS idx_mod_suggestion_categories ON mod_suggestion_category_tags(suggestion_id);
+CREATE INDEX IF NOT EXISTS idx_mod_relationships_source ON mod_relationships(source_mod_id);
+CREATE INDEX IF NOT EXISTS idx_mod_relationships_target ON mod_relationships(target_mod_id);
 CREATE INDEX IF NOT EXISTS idx_pack_items_instance ON pack_items(instance_id, pack_type);
 CREATE INDEX IF NOT EXISTS idx_categories_instance ON instance_categories(instance_id);
 CREATE INDEX IF NOT EXISTS idx_logs_created ON logs(created_at DESC);
@@ -200,7 +219,12 @@ impl Database {
         let db_path = app_data_dir.join("modpack_manager.db");
         let conn = Connection::open(&db_path)
             .with_context(|| format!("Failed to open database at {}", db_path.display()))?;
+        conn.execute("PRAGMA foreign_keys = ON", [])?;
         conn.execute_batch(SCHEMA)?;
+        ensure_column(&conn, "instances", "resource_packs_path", "TEXT")?;
+        ensure_column(&conn, "instances", "shader_packs_path", "TEXT")?;
+        ensure_column(&conn, "instances", "data_packs_path", "TEXT")?;
+        ensure_column(&conn, "instances", "config_path", "TEXT")?;
         ensure_column(&conn, "mods", "source_url", "TEXT")?;
         ensure_column(&conn, "mods", "installed_at", "TEXT NOT NULL DEFAULT ''")?;
         conn.execute(
@@ -335,6 +359,7 @@ impl Database {
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
         let mut stmt = conn.prepare(
             "SELECT i.id, i.name, i.game_dir, i.loader, i.mc_version, i.icon,
+                    i.resource_packs_path, i.shader_packs_path, i.data_packs_path, i.config_path,
                     i.created_at, i.updated_at,
                     (SELECT COUNT(*) FROM mods m WHERE m.instance_id = i.id) as mod_count,
                     (SELECT COUNT(*) FROM mods m WHERE m.instance_id = i.id AND m.enabled = 1) as enabled_mod_count
@@ -349,10 +374,14 @@ impl Database {
                     loader: LoaderType::from_str(&row.get::<_, String>(3)?),
                     mc_version: row.get(4)?,
                     icon: row.get(5)?,
-                    created_at: row.get(6)?,
-                    updated_at: row.get(7)?,
-                    mod_count: row.get(8)?,
-                    enabled_mod_count: row.get(9)?,
+                    resource_packs_path: row.get(6)?,
+                    shader_packs_path: row.get(7)?,
+                    data_packs_path: row.get(8)?,
+                    config_path: row.get(9)?,
+                    created_at: row.get(10)?,
+                    updated_at: row.get(11)?,
+                    mod_count: row.get(12)?,
+                    enabled_mod_count: row.get(13)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -368,8 +397,12 @@ impl Database {
         let id = Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO instances (id, name, game_dir, loader, mc_version, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO instances (
+                id, name, game_dir, loader, mc_version,
+                resource_packs_path, shader_packs_path, data_packs_path, config_path,
+                created_at, updated_at
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, NULL, NULL, ?6, ?7)",
             params![
                 id,
                 input.name,
@@ -393,11 +426,36 @@ impl Database {
         let game_dir = input.game_dir.unwrap_or(existing.game_dir);
         let loader = input.loader.unwrap_or(existing.loader);
         let mc_version = input.mc_version.or(existing.mc_version);
+        let resource_packs_path = input
+            .resource_packs_path
+            .unwrap_or(existing.resource_packs_path);
+        let shader_packs_path = input
+            .shader_packs_path
+            .unwrap_or(existing.shader_packs_path);
+        let data_packs_path = input
+            .data_packs_path
+            .unwrap_or(existing.data_packs_path);
+        let config_path = input.config_path.unwrap_or(existing.config_path);
         let now = chrono::Utc::now().to_rfc3339();
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
         conn.execute(
-            "UPDATE instances SET name = ?1, game_dir = ?2, loader = ?3, mc_version = ?4, updated_at = ?5 WHERE id = ?6",
-            params![name, game_dir, loader.as_str(), mc_version, now, input.id],
+            "UPDATE instances
+             SET name = ?1, game_dir = ?2, loader = ?3, mc_version = ?4,
+                 resource_packs_path = ?5, shader_packs_path = ?6, data_packs_path = ?7, config_path = ?8,
+                 updated_at = ?9
+             WHERE id = ?10",
+            params![
+                name,
+                game_dir,
+                loader.as_str(),
+                mc_version,
+                resource_packs_path,
+                shader_packs_path,
+                data_packs_path,
+                config_path,
+                now,
+                input.id
+            ],
         )?;
         drop(conn);
         self.get_instance(&input.id)?
@@ -439,7 +497,7 @@ impl Database {
             let rows = stmt.query_map(params![instance_id], |row| Self::row_to_mod_file(row))?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
-        self.attach_categories_to_mods(mods)
+        self.attach_mod_details(mods)
     }
 
     fn row_to_mod_file(row: &rusqlite::Row<'_>) -> rusqlite::Result<ModFile> {
@@ -458,25 +516,32 @@ impl Database {
             source_url: row.get(7)?,
             metadata,
             categories: vec![],
+            related_mods: vec![],
         })
     }
 
-    fn attach_categories_to_mods(&self, mut mods: Vec<ModFile>) -> Result<Vec<ModFile>> {
+    fn attach_mod_details(&self, mut mods: Vec<ModFile>) -> Result<Vec<ModFile>> {
         if mods.is_empty() {
             return Ok(mods);
         }
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
-        let mut stmt = conn.prepare(
+        let mut categories_stmt = conn.prepare(
             "SELECT mct.mod_id, ic.id, ic.instance_id, ic.name
              FROM mod_category_tags mct
              JOIN instance_categories ic ON ic.id = mct.category_id
              WHERE mct.mod_id = ?1
              ORDER BY ic.name",
         )?;
+        let mut relationships_stmt = conn.prepare(
+            "SELECT target_mod_id, relationship_type
+             FROM mod_relationships
+             WHERE source_mod_id = ?1
+             ORDER BY created_at ASC, id ASC",
+        )?;
 
         for m in &mut mods {
-            let tags = stmt
-                .query_map(params![m.id], |row| {
+            let tags = categories_stmt
+                .query_map(params![m.id.clone()], |row| {
                     Ok(InstanceCategory {
                         id: row.get(1)?,
                         instance_id: row.get(2)?,
@@ -485,6 +550,14 @@ impl Database {
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
             m.categories = tags;
+            m.related_mods = relationships_stmt
+                .query_map(params![m.id.clone()], |row| {
+                    Ok(UpdateModRelationshipInput {
+                        target_mod_id: row.get(0)?,
+                        relationship_type: ModRelationshipType::from_str(&row.get::<_, String>(1)?),
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
         }
         Ok(mods)
     }
@@ -501,7 +574,7 @@ impl Database {
             rows.next().transpose()?
         };
         Ok(match mod_file {
-            Some(m) => self.attach_categories_to_mods(vec![m])?.into_iter().next(),
+            Some(m) => self.attach_mod_details(vec![m])?.into_iter().next(),
             None => None,
         })
     }
@@ -517,7 +590,7 @@ impl Database {
             rows.next().transpose()?
         };
         Ok(match mod_file {
-            Some(m) => self.attach_categories_to_mods(vec![m])?.into_iter().next(),
+            Some(m) => self.attach_mod_details(vec![m])?.into_iter().next(),
             None => None,
         })
     }
@@ -622,9 +695,120 @@ impl Database {
         drop(conn);
 
         self.set_mod_categories(&input.mod_id, &input.category_ids)?;
+        self.replace_mod_relationships(&input.mod_id, &input.related_mods)?;
 
         self.get_mod_by_id(&input.mod_id)?
             .ok_or_else(|| anyhow::anyhow!("Mod not found after update"))
+    }
+
+    pub fn get_mod_relationships(&self, mod_id: &str) -> Result<ModRelationshipsForMod> {
+        let source = self
+            .get_mod_by_id(mod_id)?
+            .ok_or_else(|| anyhow::anyhow!("Mod not found"))?;
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let outgoing = {
+            let mut stmt = conn.prepare(
+                "SELECT
+                    mr.id,
+                    mr.instance_id,
+                    mr.source_mod_id,
+                    COALESCE(json_extract(source.metadata_json, '$.name'), source.file_name),
+                    mr.target_mod_id,
+                    COALESCE(json_extract(target.metadata_json, '$.name'), target.file_name),
+                    mr.relationship_type,
+                    mr.created_at
+                 FROM mod_relationships mr
+                 JOIN mods source ON source.id = mr.source_mod_id
+                 JOIN mods target ON target.id = mr.target_mod_id
+                 WHERE mr.source_mod_id = ?1
+                 ORDER BY mr.created_at ASC, mr.id ASC",
+            )?;
+            let rows = stmt.query_map(params![mod_id], Self::row_to_mod_relationship_edge)?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        let incoming = {
+            let mut stmt = conn.prepare(
+                "SELECT
+                    mr.id,
+                    mr.instance_id,
+                    mr.source_mod_id,
+                    COALESCE(json_extract(source.metadata_json, '$.name'), source.file_name),
+                    mr.target_mod_id,
+                    COALESCE(json_extract(target.metadata_json, '$.name'), target.file_name),
+                    mr.relationship_type,
+                    mr.created_at
+                 FROM mod_relationships mr
+                 JOIN mods source ON source.id = mr.source_mod_id
+                 JOIN mods target ON target.id = mr.target_mod_id
+                 WHERE mr.target_mod_id = ?1
+                 ORDER BY mr.created_at ASC, mr.id ASC",
+            )?;
+            let rows = stmt.query_map(params![mod_id], Self::row_to_mod_relationship_edge)?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        Ok(ModRelationshipsForMod {
+            mod_id: source.id,
+            outgoing,
+            incoming,
+        })
+    }
+
+    pub fn replace_mod_relationships(
+        &self,
+        mod_id: &str,
+        related_mods: &[UpdateModRelationshipInput],
+    ) -> Result<()> {
+        let source = self
+            .get_mod_by_id(mod_id)?
+            .ok_or_else(|| anyhow::anyhow!("Mod not found"))?;
+
+        let mut seen_targets = std::collections::HashSet::new();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            "DELETE FROM mod_relationships WHERE source_mod_id = ?1",
+            params![mod_id],
+        )?;
+
+        for related_mod in related_mods {
+            let target_id = related_mod.target_mod_id.trim();
+            if target_id.is_empty() {
+                continue;
+            }
+            if target_id == mod_id {
+                anyhow::bail!("A mod cannot relate to itself");
+            }
+            if !seen_targets.insert(target_id.to_string()) {
+                anyhow::bail!("A mod can only have one relationship per target mod");
+            }
+
+            let target: (String, String) = tx
+                .query_row(
+                    "SELECT id, instance_id FROM mods WHERE id = ?1",
+                    params![target_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(|_| anyhow::anyhow!("Related mod not found"))?;
+
+            if target.1 != source.instance_id {
+                anyhow::bail!("Related mods must belong to the same instance");
+            }
+
+            tx.execute(
+                "INSERT INTO mod_relationships (id, instance_id, source_mod_id, target_mod_id, relationship_type, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP)",
+                params![
+                    Uuid::new_v4().to_string(),
+                    source.instance_id,
+                    mod_id,
+                    target.0,
+                    related_mod.relationship_type.as_str(),
+                ],
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn set_mod_categories(&self, mod_id: &str, category_ids: &[String]) -> Result<()> {
@@ -670,6 +854,7 @@ impl Database {
             source_url: row.get(6)?,
             metadata,
             categories: vec![],
+            related_mods: vec![],
         })
     }
 
@@ -867,12 +1052,73 @@ impl Database {
         })
     }
 
-    pub fn delete_category(&self, category_id: &str) -> Result<()> {
+    pub fn delete_category(&self, input: &DeleteCategoryInput) -> Result<()> {
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
-        conn.execute(
-            "DELETE FROM instance_categories WHERE id = ?1",
-            params![category_id],
+        let category: (String, String) = conn.query_row(
+            "SELECT id, instance_id FROM instance_categories WHERE id = ?1",
+            params![input.category_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
+
+        let tx = conn.unchecked_transaction()?;
+        match input.mode {
+            DeleteCategoryMode::Clear => {
+                tx.execute(
+                    "DELETE FROM mod_category_tags WHERE category_id = ?1",
+                    params![category.0],
+                )?;
+                tx.execute(
+                    "DELETE FROM mod_suggestion_category_tags WHERE category_id = ?1",
+                    params![category.0],
+                )?;
+            }
+            DeleteCategoryMode::Recategorize => {
+                let replacement_id = input
+                    .replacement_category_id
+                    .as_deref()
+                    .ok_or_else(|| anyhow::anyhow!("Replacement category is required"))?;
+                if replacement_id == category.0 {
+                    anyhow::bail!("Replacement category must be different");
+                }
+
+                let replacement_exists: bool = tx.query_row(
+                    "SELECT EXISTS(
+                        SELECT 1 FROM instance_categories
+                        WHERE id = ?1 AND instance_id = ?2
+                    )",
+                    params![replacement_id, category.1],
+                    |row| row.get(0),
+                )?;
+                if !replacement_exists {
+                    anyhow::bail!("Replacement category must belong to the same instance");
+                }
+
+                tx.execute(
+                    "INSERT OR IGNORE INTO mod_category_tags (mod_id, category_id)
+                     SELECT mod_id, ?1 FROM mod_category_tags WHERE category_id = ?2",
+                    params![replacement_id, category.0],
+                )?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO mod_suggestion_category_tags (suggestion_id, category_id)
+                     SELECT suggestion_id, ?1 FROM mod_suggestion_category_tags WHERE category_id = ?2",
+                    params![replacement_id, category.0],
+                )?;
+                tx.execute(
+                    "DELETE FROM mod_category_tags WHERE category_id = ?1",
+                    params![category.0],
+                )?;
+                tx.execute(
+                    "DELETE FROM mod_suggestion_category_tags WHERE category_id = ?1",
+                    params![category.0],
+                )?;
+            }
+        }
+
+        tx.execute(
+            "DELETE FROM instance_categories WHERE id = ?1",
+            params![category.0],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -979,6 +1225,21 @@ impl Database {
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
         conn.execute("DELETE FROM mods WHERE id = ?1", params![mod_id])?;
         Ok(())
+    }
+
+    fn row_to_mod_relationship_edge(
+        row: &rusqlite::Row<'_>,
+    ) -> rusqlite::Result<ModRelationshipEdge> {
+        Ok(ModRelationshipEdge {
+            id: row.get(0)?,
+            instance_id: row.get(1)?,
+            source_mod_id: row.get(2)?,
+            source_mod_name: row.get(3)?,
+            target_mod_id: row.get(4)?,
+            target_mod_name: row.get(5)?,
+            relationship_type: ModRelationshipType::from_str(&row.get::<_, String>(6)?),
+            created_at: row.get(7)?,
+        })
     }
 
     pub fn list_pack_items(&self, instance_id: &str, pack_type: PackType) -> Result<Vec<PackItem>> {
@@ -1254,4 +1515,313 @@ fn copy_dir_recursive(src: &str, dst: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::category::{DeleteCategoryInput, DeleteCategoryMode};
+    use crate::models::instance::{CreateInstanceInput, LoaderType};
+    use crate::models::mod_metadata::{ModRelationshipType, UpdateModRelationshipInput};
+
+    fn test_db() -> Database {
+        let dir = std::env::temp_dir().join(format!("modly-db-test-{}", Uuid::new_v4()));
+        Database::new(dir).expect("db should initialize")
+    }
+
+    fn seed_category_fixture(db: &Database) -> (String, String, String, String) {
+        let instance = db
+            .create_instance(CreateInstanceInput {
+                name: "Test Instance".to_string(),
+                game_dir: "C:\\test-instance".to_string(),
+                loader: LoaderType::Fabric,
+                mc_version: Some("1.20.1".to_string()),
+            })
+            .expect("instance should be created");
+        let source = db
+            .create_category(CreateCategoryInput {
+                instance_id: instance.id.clone(),
+                name: "Source".to_string(),
+            })
+            .expect("source category should be created");
+        let target = db
+            .create_category(CreateCategoryInput {
+                instance_id: instance.id.clone(),
+                name: "Target".to_string(),
+            })
+            .expect("target category should be created");
+
+        let conn = db.conn.lock().expect("lock should work");
+        conn.execute(
+            "INSERT INTO mods (id, instance_id, file_name, file_path, installed_at, enabled, hash_sha256, source_url, metadata_json)
+             VALUES (?1, ?2, ?3, ?4, CURRENT_TIMESTAMP, 1, NULL, NULL, NULL)",
+            params![
+                "mod-a",
+                instance.id,
+                "mod-a.jar",
+                "C:\\test-instance\\mods\\mod-a.jar",
+            ],
+        )
+        .expect("mod should be inserted");
+        conn.execute(
+            "INSERT INTO mod_category_tags (mod_id, category_id) VALUES (?1, ?2)",
+            params!["mod-a", source.id],
+        )
+        .expect("tag should be inserted");
+        drop(conn);
+
+        (instance.id, source.id, target.id, "mod-a".to_string())
+    }
+
+    fn insert_mod(db: &Database, instance_id: &str, mod_id: &str, file_name: &str) {
+        let conn = db.conn.lock().expect("lock should work");
+        conn.execute(
+            "INSERT INTO mods (id, instance_id, file_name, file_path, installed_at, enabled, hash_sha256, source_url, metadata_json)
+             VALUES (?1, ?2, ?3, ?4, CURRENT_TIMESTAMP, 1, NULL, NULL, NULL)",
+            params![
+                mod_id,
+                instance_id,
+                file_name,
+                format!(r"C:\test-instance\mods\{file_name}"),
+            ],
+        )
+        .expect("mod should be inserted");
+    }
+
+    fn seed_relationship_fixture(db: &Database) -> (String, String, String, String, String) {
+        let instance = db
+            .create_instance(CreateInstanceInput {
+                name: "Relationships".to_string(),
+                game_dir: "C:\\relationship-instance".to_string(),
+                loader: LoaderType::Fabric,
+                mc_version: Some("1.20.1".to_string()),
+            })
+            .expect("instance should be created");
+        insert_mod(db, &instance.id, "mod-source", "source.jar");
+        insert_mod(db, &instance.id, "mod-dependency", "dependency.jar");
+        insert_mod(db, &instance.id, "mod-addon-base", "addon-base.jar");
+
+        let other_instance = db
+            .create_instance(CreateInstanceInput {
+                name: "Other".to_string(),
+                game_dir: "C:\\relationship-instance-other".to_string(),
+                loader: LoaderType::Fabric,
+                mc_version: Some("1.20.1".to_string()),
+            })
+            .expect("second instance should be created");
+        insert_mod(db, &other_instance.id, "mod-other-instance", "other.jar");
+
+        (
+            instance.id,
+            "mod-source".to_string(),
+            "mod-dependency".to_string(),
+            "mod-addon-base".to_string(),
+            "mod-other-instance".to_string(),
+        )
+    }
+
+    #[test]
+    fn clears_mod_assignments_when_deleting_category_in_clear_mode() {
+        let db = test_db();
+        let (instance_id, source_id, _target_id, mod_id) = seed_category_fixture(&db);
+
+        db.delete_category(&DeleteCategoryInput {
+            category_id: source_id.clone(),
+            mode: DeleteCategoryMode::Clear,
+            replacement_category_id: None,
+        })
+        .expect("delete should succeed");
+
+        let remaining = db
+            .list_categories(&instance_id)
+            .expect("categories should load");
+        assert!(remaining.iter().all(|category| category.id != source_id));
+
+        let updated_mod = db
+            .get_mod_by_id(&mod_id)
+            .expect("mod should load")
+            .expect("mod should exist");
+        assert!(updated_mod.categories.is_empty());
+    }
+
+    #[test]
+    fn recategorizes_mod_assignments_when_deleting_category_in_recategorize_mode() {
+        let db = test_db();
+        let (instance_id, source_id, target_id, mod_id) = seed_category_fixture(&db);
+
+        db.delete_category(&DeleteCategoryInput {
+            category_id: source_id.clone(),
+            mode: DeleteCategoryMode::Recategorize,
+            replacement_category_id: Some(target_id.clone()),
+        })
+        .expect("delete should succeed");
+
+        let remaining = db
+            .list_categories(&instance_id)
+            .expect("categories should load");
+        assert!(remaining.iter().all(|category| category.id != source_id));
+
+        let updated_mod = db
+            .get_mod_by_id(&mod_id)
+            .expect("mod should load")
+            .expect("mod should exist");
+        assert_eq!(updated_mod.categories.len(), 1);
+        assert_eq!(updated_mod.categories[0].id, target_id);
+    }
+
+    #[test]
+    fn stores_custom_instance_paths_on_update() {
+        let db = test_db();
+        let instance = db
+            .create_instance(CreateInstanceInput {
+                name: "Paths".to_string(),
+                game_dir: "C:\\packs\\paths".to_string(),
+                loader: LoaderType::Fabric,
+                mc_version: Some("1.20.1".to_string()),
+            })
+            .expect("instance should be created");
+
+        let updated = db
+            .update_instance(UpdateInstanceInput {
+                id: instance.id,
+                name: None,
+                game_dir: None,
+                loader: None,
+                mc_version: instance.mc_version,
+                resource_packs_path: Some(Some("D:\\rp".to_string())),
+                shader_packs_path: Some(None),
+                data_packs_path: Some(Some("D:\\dp".to_string())),
+                config_path: Some(Some("D:\\cfg".to_string())),
+            })
+            .expect("instance should update");
+
+        assert_eq!(updated.resource_packs_path.as_deref(), Some("D:\\rp"));
+        assert_eq!(updated.shader_packs_path, None);
+        assert_eq!(updated.data_packs_path.as_deref(), Some("D:\\dp"));
+        assert_eq!(updated.config_path.as_deref(), Some("D:\\cfg"));
+    }
+
+    #[test]
+    fn stores_manual_relationships_and_reports_reverse_links() {
+        let db = test_db();
+        let (_instance_id, source_id, dependency_id, addon_base_id, _other_instance_mod_id) =
+            seed_relationship_fixture(&db);
+
+        db.replace_mod_relationships(
+            &source_id,
+            &[
+                UpdateModRelationshipInput {
+                    target_mod_id: dependency_id.clone(),
+                    relationship_type: ModRelationshipType::Dependency,
+                },
+                UpdateModRelationshipInput {
+                    target_mod_id: addon_base_id.clone(),
+                    relationship_type: ModRelationshipType::AddonFor,
+                },
+            ],
+        )
+        .expect("relationships should save");
+
+        let relationships = db
+            .get_mod_relationships(&source_id)
+            .expect("relationships should load");
+        assert_eq!(relationships.outgoing.len(), 2);
+        assert!(
+            relationships
+                .outgoing
+                .iter()
+                .any(|edge| edge.target_mod_id == dependency_id
+                    && edge.relationship_type == ModRelationshipType::Dependency)
+        );
+        assert!(
+            relationships
+                .outgoing
+                .iter()
+                .any(|edge| edge.target_mod_id == addon_base_id
+                    && edge.relationship_type == ModRelationshipType::AddonFor)
+        );
+
+        let reverse = db
+            .get_mod_relationships(&dependency_id)
+            .expect("reverse relationships should load");
+        assert_eq!(reverse.incoming.len(), 1);
+        assert_eq!(reverse.incoming[0].source_mod_id, source_id);
+        assert_eq!(
+            reverse.incoming[0].relationship_type,
+            ModRelationshipType::Dependency
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_manual_relationships() {
+        let db = test_db();
+        let (_instance_id, source_id, dependency_id, _addon_base_id, other_instance_mod_id) =
+            seed_relationship_fixture(&db);
+
+        let self_error = db
+            .replace_mod_relationships(
+                &source_id,
+                &[UpdateModRelationshipInput {
+                    target_mod_id: source_id.clone(),
+                    relationship_type: ModRelationshipType::Dependency,
+                }],
+            )
+            .expect_err("self links should be rejected");
+        assert!(self_error.to_string().contains("cannot relate to itself"));
+
+        let duplicate_error = db
+            .replace_mod_relationships(
+                &source_id,
+                &[
+                    UpdateModRelationshipInput {
+                        target_mod_id: dependency_id.clone(),
+                        relationship_type: ModRelationshipType::Dependency,
+                    },
+                    UpdateModRelationshipInput {
+                        target_mod_id: dependency_id.clone(),
+                        relationship_type: ModRelationshipType::AddonFor,
+                    },
+                ],
+            )
+            .expect_err("duplicate targets should be rejected");
+        assert!(duplicate_error
+            .to_string()
+            .contains("one relationship per target mod"));
+
+        let cross_instance_error = db
+            .replace_mod_relationships(
+                &source_id,
+                &[UpdateModRelationshipInput {
+                    target_mod_id: other_instance_mod_id,
+                    relationship_type: ModRelationshipType::Dependency,
+                }],
+            )
+            .expect_err("cross-instance links should be rejected");
+        assert!(cross_instance_error
+            .to_string()
+            .contains("same instance"));
+    }
+
+    #[test]
+    fn cascades_manual_relationships_when_target_mod_is_deleted() {
+        let db = test_db();
+        let (_instance_id, source_id, dependency_id, _addon_base_id, _other_instance_mod_id) =
+            seed_relationship_fixture(&db);
+
+        db.replace_mod_relationships(
+            &source_id,
+            &[UpdateModRelationshipInput {
+                target_mod_id: dependency_id.clone(),
+                relationship_type: ModRelationshipType::Dependency,
+            }],
+        )
+        .expect("relationships should save");
+
+        db.delete_mod(&dependency_id).expect("target mod should delete");
+
+        let relationships = db
+            .get_mod_relationships(&source_id)
+            .expect("relationships should load");
+        assert!(relationships.outgoing.is_empty());
+    }
 }

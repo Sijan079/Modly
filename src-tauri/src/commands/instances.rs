@@ -18,7 +18,7 @@ pub async fn get_instance(id: String) -> Result<Option<Instance>, String> {
 pub async fn create_instance(input: CreateInstanceInput) -> Result<Instance, String> {
     with_state(|state| {
         std::fs::create_dir_all(&input.game_dir).map_err(|e| e.to_string())?;
-        for folder in ["mods", "resourcepacks", "shaderpacks", "config"] {
+        for folder in ["mods", "resourcepacks", "shaderpacks", "datapacks", "config"] {
             std::fs::create_dir_all(std::path::Path::new(&input.game_dir).join(folder))
                 .map_err(|e| e.to_string())?;
         }

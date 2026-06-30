@@ -1,6 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { UpdateModMetadataInput, UpsertModSuggestionInput } from "@/lib/types";
+import type {
+  ModRelationshipsForMod,
+  UpdateModMetadataInput,
+  UpsertModSuggestionInput,
+} from "@/lib/types";
 
 export function useMods(instanceId: string | null) {
   return useQuery({
@@ -148,9 +152,18 @@ export function useUpdateModMetadata() {
     mutationFn: (input: UpdateModMetadataInput) => api.mods.updateMetadata(input),
     onSuccess: (mod) => {
       qc.invalidateQueries({ queryKey: ["mods", mod.instanceId] });
+      qc.invalidateQueries({ queryKey: ["mod-relationships", mod.id] });
       qc.invalidateQueries({ queryKey: ["instances"] });
       qc.invalidateQueries({ queryKey: ["categories", mod.instanceId] });
     },
+  });
+}
+
+export function useModRelationships(modId: string | null) {
+  return useQuery<ModRelationshipsForMod | null>({
+    queryKey: ["mod-relationships", modId],
+    queryFn: () => (modId ? api.mods.relationships(modId) : null),
+    enabled: !!modId,
   });
 }
 

@@ -10,11 +10,13 @@ import type {
   ModFile,
   ModIntegrityAudit,
   ModMetadata,
+  ModRelationshipsForMod,
   ModSuggestion,
   UpdateModMetadataInput,
   UpsertModSuggestionInput,
   InstanceCategory,
   CreateCategoryInput,
+  DeleteCategoryInput,
   ExportModListInput,
   DirectoryEntry,
   PackItem,
@@ -86,6 +88,8 @@ export const api = {
       invoke<void>("export_mod_list_html", { input }),
     updateMetadata: (input: UpdateModMetadataInput) =>
       invoke<ModFile>("update_mod_metadata", { input }),
+    relationships: (modId: string) =>
+      invoke<ModRelationshipsForMod>("list_mod_relationships", { modId }),
     upsertSuggestion: (input: UpsertModSuggestionInput) =>
       invoke<ModSuggestion>("upsert_mod_suggestion", { input }),
     resetMetadata: (modId: string) =>
@@ -96,8 +100,8 @@ export const api = {
       invoke<InstanceCategory[]>("list_categories", { instanceId }),
     create: (input: CreateCategoryInput) =>
       invoke<InstanceCategory>("create_category", { input }),
-    delete: (categoryId: string) =>
-      invoke<void>("delete_category", { categoryId }),
+    delete: (input: DeleteCategoryInput) =>
+      invoke<void>("delete_category", { input }),
   },
   packs: {
     list: (instanceId: string, packType: PackType) =>
@@ -140,8 +144,8 @@ export const api = {
       invoke<void>("append_update_log", { instanceId, level, message }),
   },
   configs: {
-    scanTree: (instancePath: string) =>
-      invoke<ConfigTreeNode[]>("scan_config_tree", { instancePath }),
+    scanTree: (configPath: string) =>
+      invoke<ConfigTreeNode[]>("scan_config_tree", { configPath }),
     readFile: (path: string) =>
       invoke<string>("read_config_file", { path }),
     writeFile: (path: string, content: string) =>

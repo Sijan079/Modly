@@ -46,10 +46,10 @@ fn build_tree(path: &Path) -> Result<ConfigTreeNode, String> {
     })
 }
 
-/// Scans the config directory of a Minecraft instance and returns a file tree.
+/// Scans the resolved config directory and returns a file tree.
 #[tauri::command]
-pub async fn scan_config_tree(instance_path: String) -> Result<Vec<ConfigTreeNode>, String> {
-    let config_path: PathBuf = Path::new(&instance_path).join("config");
+pub async fn scan_config_tree(config_path: String) -> Result<Vec<ConfigTreeNode>, String> {
+    let config_path: PathBuf = PathBuf::from(&config_path);
     if !config_path.exists() {
         return Ok(Vec::new());
     }

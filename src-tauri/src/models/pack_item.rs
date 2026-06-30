@@ -29,12 +29,14 @@ pub struct PackItemMetadata {
 pub enum PackType {
     ResourcePack,
     ShaderPack,
+    Datapack,
 }
 
 impl PackType {
     pub fn from_str(value: &str) -> Self {
         match value {
             "shaderPack" => Self::ShaderPack,
+            "datapack" => Self::Datapack,
             _ => Self::ResourcePack,
         }
     }
@@ -43,6 +45,7 @@ impl PackType {
         match self {
             Self::ResourcePack => "resourcePack",
             Self::ShaderPack => "shaderPack",
+            Self::Datapack => "datapack",
         }
     }
 
@@ -50,6 +53,7 @@ impl PackType {
         match self {
             Self::ResourcePack => "resourcepacks",
             Self::ShaderPack => "shaderpacks",
+            Self::Datapack => "datapacks",
         }
     }
 }
@@ -62,4 +66,16 @@ pub struct UpdatePackItemMetadataInput {
     pub author: String,
     pub website_url: Option<String>,
     pub notes: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PackType;
+
+    #[test]
+    fn maps_datapack_type_to_datapacks_folder() {
+        assert_eq!(PackType::from_str("datapack"), PackType::Datapack);
+        assert_eq!(PackType::Datapack.as_str(), "datapack");
+        assert_eq!(PackType::Datapack.folder_name(), "datapacks");
+    }
 }

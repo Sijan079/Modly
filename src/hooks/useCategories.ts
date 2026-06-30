@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import type { DeleteCategoryInput } from "@/lib/types";
 
 export function useCategories(instanceId: string | null) {
   return useQuery({
@@ -23,7 +24,7 @@ export function useCreateCategory() {
 export function useDeleteCategory() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (categoryId: string) => api.categories.delete(categoryId),
+    mutationFn: (input: DeleteCategoryInput) => api.categories.delete(input),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["categories"] });
       qc.invalidateQueries({ queryKey: ["mods"] });

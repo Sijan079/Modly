@@ -13,6 +13,10 @@ export interface Instance {
   loader: LoaderType;
   mcVersion: string | null;
   icon: string | null;
+  resourcePacksPath: string | null;
+  shaderPacksPath: string | null;
+  dataPacksPath: string | null;
+  configPath: string | null;
   createdAt: string;
   updatedAt: string;
   modCount: number;
@@ -36,6 +40,7 @@ export interface ModFile {
   sourceUrl: string | null;
   metadata: ModMetadata | null;
   categories: InstanceCategory[];
+  relatedMods: UpdateModRelationshipInput[];
 }
 
 export type ModSuggestion = ModFile;
@@ -108,6 +113,14 @@ export interface CreateCategoryInput {
   name: string;
 }
 
+export type DeleteCategoryMode = "clear" | "recategorize";
+
+export interface DeleteCategoryInput {
+  categoryId: string;
+  mode: DeleteCategoryMode;
+  replacementCategoryId?: string | null;
+}
+
 export interface UpdateModMetadataInput {
   modId: string;
   name: string;
@@ -120,6 +133,7 @@ export interface UpdateModMetadataInput {
   modIdField: string | null;
   installedModrinthVersionId?: string | null;
   categoryIds: string[];
+  relatedMods: UpdateModRelationshipInput[];
 }
 
 export interface UpsertModSuggestionInput {
@@ -142,6 +156,30 @@ export interface ModDependency {
   modId: string;
   versionRange: string | null;
   kind: string;
+}
+
+export type ModRelationshipType = "dependency" | "addon_for";
+
+export interface UpdateModRelationshipInput {
+  targetModId: string;
+  relationshipType: ModRelationshipType;
+}
+
+export interface ModRelationshipEdge {
+  id: string;
+  instanceId: string;
+  sourceModId: string;
+  sourceModName: string;
+  targetModId: string;
+  targetModName: string;
+  relationshipType: ModRelationshipType;
+  createdAt: string;
+}
+
+export interface ModRelationshipsForMod {
+  modId: string;
+  outgoing: ModRelationshipEdge[];
+  incoming: ModRelationshipEdge[];
 }
 
 export interface MinecraftScanResult {
@@ -167,6 +205,7 @@ export interface ScanContentSummary {
   modCount: number;
   resourcePackCount: number;
   shaderPackCount: number;
+  datapackCount: number;
   saveCount: number;
 }
 
@@ -220,7 +259,7 @@ export interface DirectoryEntry {
   isDir: boolean;
 }
 
-export type PackType = "resourcePack" | "shaderPack";
+export type PackType = "resourcePack" | "shaderPack" | "datapack";
 
 export interface PackItemMetadata {
   displayName: string;
@@ -356,4 +395,8 @@ export interface UpdateInstanceInput {
   gameDir?: string | null;
   loader?: LoaderType | null;
   mcVersion?: string | null;
+  resourcePacksPath?: string | null;
+  shaderPacksPath?: string | null;
+  dataPacksPath?: string | null;
+  configPath?: string | null;
 }

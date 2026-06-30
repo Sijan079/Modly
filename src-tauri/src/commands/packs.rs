@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use tauri::command;
 use uuid::Uuid;
 
@@ -18,7 +16,7 @@ pub async fn scan_pack_items(
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "Instance not found".to_string())?;
         let pack_type = PackType::from_str(&pack_type);
-        let folder = Path::new(&instance.game_dir).join(pack_type.folder_name());
+        let folder = instance.resolved_pack_path(pack_type);
 
         if !folder.exists() {
             return Ok(vec![]);

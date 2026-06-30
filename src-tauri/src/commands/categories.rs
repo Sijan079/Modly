@@ -1,6 +1,6 @@
 use tauri::command;
 
-use crate::models::category::{CreateCategoryInput, InstanceCategory};
+use crate::models::category::{CreateCategoryInput, DeleteCategoryInput, InstanceCategory};
 use crate::state::with_state;
 
 #[command]
@@ -19,11 +19,11 @@ pub async fn create_category(input: CreateCategoryInput) -> Result<InstanceCateg
 }
 
 #[command]
-pub async fn delete_category(category_id: String) -> Result<(), String> {
+pub async fn delete_category(input: DeleteCategoryInput) -> Result<(), String> {
     with_state(|state| {
         state
             .db
-            .delete_category(&category_id)
+            .delete_category(&input)
             .map_err(|e| e.to_string())
     })
 }

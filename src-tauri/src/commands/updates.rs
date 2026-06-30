@@ -185,6 +185,7 @@ pub async fn confirm_update_match(input: ConfirmUpdateMatchInput) -> Result<(), 
                     .iter()
                     .map(|category| category.id.clone())
                     .collect(),
+                related_mods: vec![],
             })
             .map_err(|e| e.to_string())?;
         Ok(())
@@ -271,6 +272,7 @@ pub async fn update_mod_from_modrinth(
             source_url: existing.source_url,
             metadata,
             categories: existing.categories,
+            related_mods: existing.related_mods,
         };
         state.db.upsert_mod(&updated).map_err(|e| e.to_string())?;
         let saved = state
@@ -377,6 +379,7 @@ pub async fn install_suggestion_from_modrinth(
             source_url: suggestion.source_url.clone(),
             metadata,
             categories: suggestion.categories.clone(),
+            related_mods: vec![],
         };
 
         state.db.upsert_mod(&mod_file).map_err(|e| e.to_string())?;

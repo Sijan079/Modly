@@ -97,6 +97,14 @@ export function ModsPage() {
     setFilters(defaultFilters);
   };
 
+  const handleCategoryDeleted = (categoryId: string) => {
+    setFilters((current) =>
+      current.categoryId === categoryId
+        ? { ...current, categoryId: null }
+        : current
+    );
+  };
+
   const handleAddMods = async () => {
     if (!instanceId) return;
     const files = await open({
@@ -297,7 +305,10 @@ export function ModsPage() {
         }
       />
 
-      <CategoryManager instanceId={instanceId} />
+      <CategoryManager
+        instanceId={instanceId}
+        onCategoryDeleted={handleCategoryDeleted}
+      />
 
       {showIntegrityAudit && (
         <IntegrityAuditPanel
@@ -376,6 +387,7 @@ export function ModsPage() {
 
       <ModEditDialog
         mod={editingMod}
+        mods={mods}
         categories={categories}
         open={editingMod !== null}
         onOpenChange={(open) => !open && setEditingMod(null)}

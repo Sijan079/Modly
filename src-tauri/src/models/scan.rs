@@ -26,6 +26,7 @@ pub enum PathKind {
     Mods,
     ResourcePacks,
     ShaderPacks,
+    Datapacks,
     Saves,
     Versions,
     Instances,
@@ -45,6 +46,7 @@ pub struct ScanContentSummary {
     pub mod_count: u64,
     pub resource_pack_count: u64,
     pub shader_pack_count: u64,
+    pub datapack_count: u64,
     pub save_count: u64,
 }
 

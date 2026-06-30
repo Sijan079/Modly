@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { ExternalLink, RotateCcw, Save } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -16,7 +16,9 @@ import type {
   InstanceCategory,
   ModFile,
   ModLoaderKind,
+  ModRelationshipType,
   ModSide,
+  UpdateModRelationshipInput,
   UpdateModMetadataInput,
 } from "@/lib/types";
 import { formatLoader } from "@/lib/utils";
@@ -34,6 +36,7 @@ const SIDES: ModSide[] = ["unknown", "client", "server", "both"];
 
 interface ModEditDialogProps {
   mod: ModFile | null;
+  mods: ModFile[];
   categories: InstanceCategory[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -45,6 +48,7 @@ interface ModEditDialogProps {
 
 export function ModEditDialog({
   mod,
+  mods,
   categories,
   open,
   onOpenChange,
@@ -60,6 +64,7 @@ export function ModEditDialog({
   const [loader, setLoader] = useState<ModLoaderKind>("unknown");
   const [side, setSide] = useState<ModSide>("unknown");
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>([]);
+  const [relatedMods, setRelatedMods] = useState<UpdateModRelationshipInput[]>([]);
 
   useEffect(() => {
     if (!mod) return;
@@ -71,6 +76,7 @@ export function ModEditDialog({
     setLoader((meta?.loader as ModLoaderKind) ?? "unknown");
     setSide(meta?.side ?? "unknown");
     setSelectedCategoryIds(mod.categories.map((category) => category.id));
+    setRelatedMods(mod.relatedMods ?? []);
   }, [mod]);
 
   if (!mod) return null;
@@ -99,8 +105,46 @@ export function ModEditDialog({
       side,
       modIdField: mod.metadata?.modId ?? null,
       categoryIds: selectedCategoryIds,
+      relatedMods: relatedMods.filter((relatedMod) => relatedMod.targetModId),
     });
   };
+
+  const relationshipOptions = mods
+    .filter((candidate) => candidate.id !== mod.id)
+    .sort((a, b) =>
+      (a.metadata?.name ?? a.fileName).localeCompare(b.metadata?.name ?? b.fileName)
+    );
+
+  const addRelatedMod = () => {
+    const nextTarget = relationshipOptions.find(
+      (candidate) => !relatedMods.some((relatedMod) => relatedMod.targetModId === candidate.id)
+    );
+    setRelatedMods((prev) => [
+      ...prev,
+      {
+        targetModId: nextTarget?.id ?? "",
+        relationshipType: "dependency",
+      },
+    ]);
+  };
+
+  const updateRelatedMod = (
+    index: number,
+    patch: Partial<UpdateModRelationshipInput>
+  ) => {
+    setRelatedMods((prev) =>
+      prev.map((relatedMod, relatedIndex) =>
+        relatedIndex === index ? { ...relatedMod, ...patch } : relatedMod
+      )
+    );
+  };
+
+  const removeRelatedMod = (index: number) => {
+    setRelatedMods((prev) => prev.filter((_, relatedIndex) => relatedIndex !== index));
+  };
+
+  const getRelationshipLabel = (value: ModRelationshipType) =>
+    value === "addon_for" ? "Add-on For" : "Dependency";
 
   const openWebsite = () => {
     const url = normalizeSourceUrl(websiteUrl);
@@ -237,6 +281,62 @@ export function ModEditDialog({
               </div>
             )}
           </div>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <Label>Related Mods</Label>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={addRelatedMod}
+                disabled={relationshipOptions.length === 0}
+              >
+                Add Related Mod
+              </Button>
+            </div>
+            {relatedMods.length === 0 ? (
+              <p className="text-xs text-[var(--color-muted-foreground)]">
+                No related mods mapped yet.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {relatedMods.map((relatedMod, index) => (
+                  <div key={`${relatedMod.targetModId || "new"}-${index}`} className="grid gap-2 md:grid-cols-[1fr_10rem_auto]">
+                    <RelatedModPicker
+                      value={relatedMod.targetModId}
+                      options={relationshipOptions}
+                      disabledIds={relatedMods
+                        .filter((_, relatedIndex) => relatedIndex !== index)
+                        .map((existing) => existing.targetModId)}
+                      onChange={(targetModId) =>
+                        updateRelatedMod(index, { targetModId })
+                      }
+                    />
+                    <select
+                      className="flex h-9 w-full rounded-md border border-[var(--color-input)] bg-[var(--color-muted)] px-3 text-sm"
+                      value={relatedMod.relationshipType}
+                      onChange={(event) =>
+                        updateRelatedMod(index, {
+                          relationshipType: event.target.value as ModRelationshipType,
+                        })
+                      }
+                    >
+                      <option value="dependency">{getRelationshipLabel("dependency")}</option>
+                      <option value="addon_for">{getRelationshipLabel("addon_for")}</option>
+                    </select>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => removeRelatedMod(index)}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="flex justify-between gap-2">
@@ -261,5 +361,71 @@ export function ModEditDialog({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function RelatedModPicker({
+  value,
+  options,
+  disabledIds,
+  onChange,
+}: {
+  value: string;
+  options: ModFile[];
+  disabledIds: string[];
+  onChange: (targetModId: string) => void;
+}) {
+  const listId = useId();
+  const [text, setText] = useState("");
+
+  useEffect(() => {
+    const selected = options.find((candidate) => candidate.id === value);
+    setText(selected ? selected.metadata?.name ?? selected.fileName : "");
+  }, [options, value]);
+
+  const availableOptions = options.filter(
+    (candidate) => !disabledIds.includes(candidate.id) || candidate.id === value
+  );
+
+  const resolveSelection = (nextText: string) => {
+    const match = availableOptions.find(
+      (candidate) =>
+        (candidate.metadata?.name ?? candidate.fileName).toLowerCase() ===
+        nextText.trim().toLowerCase()
+    );
+    if (match) {
+      onChange(match.id);
+    } else if (!nextText.trim()) {
+      onChange("");
+    }
+  };
+
+  return (
+    <>
+      <input
+        list={listId}
+        className="flex h-9 w-full rounded-md border border-[var(--color-input)] bg-[var(--color-muted)] px-3 text-sm"
+        value={text}
+        onChange={(event) => {
+          const nextText = event.target.value;
+          setText(nextText);
+        }}
+        onBlur={() => resolveSelection(text)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            resolveSelection(text);
+          }
+        }}
+        placeholder="Search related mod..."
+      />
+      <datalist id={listId}>
+        {availableOptions.map((candidate) => (
+          <option
+            key={candidate.id}
+            value={candidate.metadata?.name ?? candidate.fileName}
+          />
+        ))}
+      </datalist>
+    </>
   );
 }

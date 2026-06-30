@@ -36,6 +36,10 @@ export function InstanceEditDialog({
   const [gameDir, setGameDir] = useState("");
   const [loader, setLoader] = useState<LoaderType>("fabric");
   const [mcVersion, setMcVersion] = useState("");
+  const [resourcePacksPath, setResourcePacksPath] = useState("");
+  const [shaderPacksPath, setShaderPacksPath] = useState("");
+  const [dataPacksPath, setDataPacksPath] = useState("");
+  const [configPath, setConfigPath] = useState("");
 
   useEffect(() => {
     if (!instance) {
@@ -43,6 +47,10 @@ export function InstanceEditDialog({
       setGameDir("");
       setLoader("fabric");
       setMcVersion("");
+      setResourcePacksPath("");
+      setShaderPacksPath("");
+      setDataPacksPath("");
+      setConfigPath("");
       return;
     }
 
@@ -50,6 +58,10 @@ export function InstanceEditDialog({
     setGameDir(instance.gameDir);
     setLoader(instance.loader);
     setMcVersion(instance.mcVersion ?? "");
+    setResourcePacksPath(instance.resourcePacksPath ?? "");
+    setShaderPacksPath(instance.shaderPacksPath ?? "");
+    setDataPacksPath(instance.dataPacksPath ?? "");
+    setConfigPath(instance.configPath ?? "");
   }, [instance]);
 
   const handleSave = async () => {
@@ -61,13 +73,35 @@ export function InstanceEditDialog({
       gameDir: gameDir.trim(),
       loader,
       mcVersion: mcVersion.trim() || null,
+      resourcePacksPath: resourcePacksPath.trim() || null,
+      shaderPacksPath: shaderPacksPath.trim() || null,
+      dataPacksPath: dataPacksPath.trim() || null,
+      configPath: configPath.trim() || null,
     });
   };
 
   const handlePickGameDir = async () => {
-    const selected = await openDialog({ directory: true, multiple: false });
+    const selected = await openDialog({
+      directory: true,
+      multiple: false,
+      defaultPath: gameDir || undefined,
+    });
     if (selected && typeof selected === "string") {
       setGameDir(selected);
+    }
+  };
+
+  const pickPath = async (
+    currentValue: string,
+    setter: (value: string) => void
+  ) => {
+    const selected = await openDialog({
+      directory: true,
+      multiple: false,
+      defaultPath: currentValue || gameDir || undefined,
+    });
+    if (selected && typeof selected === "string") {
+      setter(selected);
     }
   };
 
@@ -142,6 +176,44 @@ export function InstanceEditDialog({
               />
             </div>
           </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <PathOverrideField
+              label="Resource Packs Path"
+              value={resourcePacksPath}
+              placeholder={`${gameDir || "C:\\Games\\MyModpack"}\\resourcepacks`}
+              onChange={setResourcePacksPath}
+              onBrowse={() => pickPath(resourcePacksPath, setResourcePacksPath)}
+              onClear={() => setResourcePacksPath("")}
+            />
+            <PathOverrideField
+              label="Shader Packs Path"
+              value={shaderPacksPath}
+              placeholder={`${gameDir || "C:\\Games\\MyModpack"}\\shaderpacks`}
+              onChange={setShaderPacksPath}
+              onBrowse={() => pickPath(shaderPacksPath, setShaderPacksPath)}
+              onClear={() => setShaderPacksPath("")}
+            />
+            <PathOverrideField
+              label="Datapacks Path"
+              value={dataPacksPath}
+              placeholder={`${gameDir || "C:\\Games\\MyModpack"}\\datapacks`}
+              onChange={setDataPacksPath}
+              onBrowse={() => pickPath(dataPacksPath, setDataPacksPath)}
+              onClear={() => setDataPacksPath("")}
+            />
+            <PathOverrideField
+              label="Config Path"
+              value={configPath}
+              placeholder={`${gameDir || "C:\\Games\\MyModpack"}\\config`}
+              onChange={setConfigPath}
+              onBrowse={() => pickPath(configPath, setConfigPath)}
+              onClear={() => setConfigPath("")}
+            />
+          </div>
+          <p className="text-xs text-[var(--color-muted-foreground)]">
+            Leave path overrides blank to keep using the default folders inside the game directory.
+          </p>
         </div>
 
         <div className="flex items-center justify-between gap-2">
@@ -167,5 +239,42 @@ export function InstanceEditDialog({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function PathOverrideField({
+  label,
+  value,
+  placeholder,
+  onChange,
+  onBrowse,
+  onClear,
+}: {
+  label: string;
+  value: string;
+  placeholder: string;
+  onChange: (value: string) => void;
+  onBrowse: () => void;
+  onClear: () => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <Label>{label}</Label>
+      <div className="flex gap-2">
+        <Input
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={placeholder}
+        />
+        <Button type="button" variant="outline" size="icon" onClick={onBrowse} title={`Browse ${label}`}>
+          <FolderOpen className="h-4 w-4" />
+        </Button>
+      </div>
+      {value && (
+        <Button type="button" variant="ghost" size="sm" className="h-7 px-0" onClick={onClear}>
+          Clear override
+        </Button>
+      )}
+    </div>
   );
 }

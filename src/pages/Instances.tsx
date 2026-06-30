@@ -21,6 +21,7 @@ import { useAppStore, filterInstances } from "@/store/app";
 import { useConfigsStore } from "@/store/configsStore";
 import { api } from "@/lib/api";
 import { buildExportDefaultPath } from "@/lib/export-paths";
+import { getResolvedConfigPath } from "@/lib/instance-paths";
 import type { Instance, LoaderType, UpdateInstanceInput } from "@/lib/types";
 
 type PreloadState =
@@ -109,24 +110,32 @@ export function InstancesPage() {
   const preloadInstanceContent = async (instance: Instance, auditAfterScan: boolean) => {
     setPreload({
       status: "loading",
-      step: "Scanning mods, resource packs, shader packs, and config files...",
+      step: "Scanning mods, DSR pack folders, and config files...",
       error: null,
     });
     setSelectedInstance(instance.id);
 
     try {
-      const [modsResult, resourcePacksResult, shaderPacksResult, configResult] =
+      const [
+        modsResult,
+        resourcePacksResult,
+        shaderPacksResult,
+        datapacksResult,
+        configResult,
+      ] =
         await Promise.allSettled([
           api.mods.scan(instance.id),
           api.packs.scan(instance.id, "resourcePack"),
           api.packs.scan(instance.id, "shaderPack"),
-          api.configs.scanTree(instance.gameDir),
+          api.packs.scan(instance.id, "datapack"),
+          api.configs.scanTree(getResolvedConfigPath(instance)),
         ]);
 
       const failures = [
         preloadFailure("Mods", modsResult),
-        preloadFailure("Resource packs", resourcePacksResult),
-        preloadFailure("Shader packs", shaderPacksResult),
+        preloadFailure("DSR resource packs", resourcePacksResult),
+        preloadFailure("DSR shader packs", shaderPacksResult),
+        preloadFailure("DSR datapacks", datapacksResult),
         preloadFailure("Configs", configResult),
       ].filter(Boolean);
 
@@ -151,6 +160,9 @@ export function InstancesPage() {
         queryClient.invalidateQueries({
           queryKey: ["packs", instance.id, "shaderPack"],
         }),
+        queryClient.invalidateQueries({
+          queryKey: ["packs", instance.id, "datapack"],
+        }),
         queryClient.invalidateQueries({ queryKey: ["categories", instance.id] }),
         queryClient.prefetchQuery({
           queryKey: ["mods", instance.id],
@@ -163,6 +175,10 @@ export function InstancesPage() {
         queryClient.prefetchQuery({
           queryKey: ["packs", instance.id, "shaderPack"],
           queryFn: () => api.packs.list(instance.id, "shaderPack"),
+        }),
+        queryClient.prefetchQuery({
+          queryKey: ["packs", instance.id, "datapack"],
+          queryFn: () => api.packs.list(instance.id, "datapack"),
         }),
       ]);
 

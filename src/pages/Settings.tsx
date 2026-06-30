@@ -105,7 +105,7 @@ export function SettingsPage() {
         >
           <ToggleRow
             label="Preload new instances"
-            detail="Scan mods, resource packs, shader packs, and config when an instance is added."
+            detail="Scan mods, DSR pack folders, and config when an instance is added."
             checked={form.autoScanOnInstanceAdd}
             onCheckedChange={(checked) => updateForm("autoScanOnInstanceAdd", checked)}
           />
