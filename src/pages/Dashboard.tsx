@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -21,6 +21,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { ExportZipDialog } from "@/components/instances/ExportZipDialog";
 import { PageShell } from "@/components/layout/PageShell";
 import { useInstances } from "@/hooks/useInstances";
 import { useCheckModIntegrity, useLatestModIntegrityAudit, useMods } from "@/hooks/useMods";
@@ -32,6 +33,7 @@ import { getResolvedConfigPath } from "@/lib/instance-paths";
 import { formatDate, formatLoader } from "@/lib/utils";
 import type {
   ConfigTreeNode,
+  ExportInstanceZipInput,
   Instance,
   LogEntry,
   MinecraftScanResult,
@@ -41,7 +43,7 @@ import type {
 
 export function DashboardPage() {
   const queryClient = useQueryClient();
-  const { selectedInstanceId } = useAppStore();
+  const { selectedInstanceId, setSelectedInstance } = useAppStore();
   const { data: instances = [] } = useInstances();
   const selectedInstance =
     instances.find((instance) => instance.id === selectedInstanceId) ??
@@ -55,6 +57,7 @@ export function DashboardPage() {
   const { data: shaderPacks = [] } = usePacks(instanceId, "shaderPack");
   const { data: datapacks = [] } = usePacks(instanceId, "datapack");
   const integrityMutation = useCheckModIntegrity();
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const resolvedConfigPath = selectedInstance
     ? getResolvedConfigPath(selectedInstance)
     : null;
@@ -114,7 +117,13 @@ export function DashboardPage() {
   });
 
   const exportZipMutation = useMutation({
-    mutationFn: async (instance: Instance) => {
+    mutationFn: async ({
+      instance,
+      options,
+    }: {
+      instance: Instance;
+      options: Omit<ExportInstanceZipInput, "instanceId" | "outputPath">;
+    }) => {
       const settings = await api.settings.get();
       const outputPath = await save({
         defaultPath: buildExportDefaultPath(
@@ -124,7 +133,11 @@ export function DashboardPage() {
         filters: [{ name: "ZIP Archive", extensions: ["zip"] }],
       });
       if (!outputPath) return;
-      await api.instances.exportZip(instance.id, outputPath);
+      await api.instances.exportZip({
+        instanceId: instance.id,
+        outputPath,
+        ...options,
+      });
     },
   });
 
@@ -175,6 +188,19 @@ export function DashboardPage() {
                   <h2 className="truncate text-2xl font-semibold">
                     {selectedInstance.name}
                   </h2>
+                  <select
+                    className="h-9 max-w-full rounded-md border border-[var(--color-input)] bg-[var(--color-muted)] px-3 text-sm"
+                    value={instanceId ?? ""}
+                    onChange={(event) => setSelectedInstance(event.target.value || null)}
+                    aria-label="Select instance"
+                  >
+                    <option value="">Select instance</option>
+                    {instances.map((instance) => (
+                      <option key={instance.id} value={instance.id}>
+                        {instance.name}
+                      </option>
+                    ))}
+                  </select>
                   <Badge variant="secondary">{formatLoader(selectedInstance.loader)}</Badge>
                   {selectedInstance.mcVersion && (
                     <Badge variant="outline">{selectedInstance.mcVersion}</Badge>
@@ -233,7 +259,7 @@ export function DashboardPage() {
                   </Button>
                   <Button
                     variant="outline"
-                    onClick={() => exportZipMutation.mutate(selectedInstance)}
+                    onClick={() => setExportDialogOpen(true)}
                     disabled={exportZipMutation.isPending}
                   >
                     <Archive className="h-4 w-4" />
@@ -333,6 +359,17 @@ export function DashboardPage() {
               )}
             </CardContent>
           </Card>
+
+          <ExportZipDialog
+            instance={selectedInstance}
+            open={exportDialogOpen}
+            exporting={exportZipMutation.isPending}
+            onOpenChange={setExportDialogOpen}
+            onConfirm={async (instance, options) => {
+              await exportZipMutation.mutateAsync({ instance, options });
+              setExportDialogOpen(false);
+            }}
+          />
         </>
       )}
     </div>

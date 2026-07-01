@@ -109,6 +109,19 @@ pub struct UpdateInstanceInput {
     pub config_path: Option<Option<String>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportInstanceZipInput {
+    pub instance_id: String,
+    pub output_path: String,
+    pub include_mods: bool,
+    pub include_configs: bool,
+    pub include_resource_packs: bool,
+    pub include_shader_packs: bool,
+    pub include_datapacks: bool,
+    pub include_manifest: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Instance, LoaderType};

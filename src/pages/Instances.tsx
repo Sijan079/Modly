@@ -5,6 +5,7 @@ import { CheckCircle2, FolderOpen, Loader2, Plus, Import, XCircle } from "lucide
 import { PageShell } from "@/components/layout/PageShell";
 import { PageSearchBar } from "@/components/layout/PageSearchBar";
 import { PageToolbar } from "@/components/layout/PageToolbar";
+import { ExportZipDialog } from "@/components/instances/ExportZipDialog";
 import { InstanceCard } from "@/components/instances/InstanceCard";
 import { InstanceEditDialog } from "@/components/instances/InstanceEditDialog";
 import { Button } from "@/components/ui/button";
@@ -12,6 +13,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
 import {
   useInstances,
   useCreateInstance,
@@ -22,12 +24,22 @@ import { useConfigsStore } from "@/store/configsStore";
 import { api } from "@/lib/api";
 import { buildExportDefaultPath } from "@/lib/export-paths";
 import { getResolvedConfigPath } from "@/lib/instance-paths";
-import type { Instance, LoaderType, UpdateInstanceInput } from "@/lib/types";
+import type {
+  ExportInstanceZipInput,
+  Instance,
+  LoaderType,
+  UpdateInstanceInput,
+} from "@/lib/types";
 
 type PreloadState =
   | { status: "idle"; step: string; error: null }
   | { status: "loading"; step: string; error: null }
   | { status: "error"; step: string; error: string };
+
+type ImportProgressState =
+  | { active: false; current: 0; total: 0; fileName: ""; error: null }
+  | { active: true; current: number; total: number; fileName: string; error: null }
+  | { active: true; current: number; total: number; fileName: string; error: string };
 
 export function InstancesPage() {
   const queryClient = useQueryClient();
@@ -39,6 +51,7 @@ export function InstancesPage() {
   const [instanceSearch, setInstanceSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [editingInstance, setEditingInstance] = useState<Instance | null>(null);
+  const [pendingExportInstance, setPendingExportInstance] = useState<Instance | null>(null);
   const [pendingDeleteInstance, setPendingDeleteInstance] = useState<Instance | null>(null);
   const [deleteInstanceName, setDeleteInstanceName] = useState("");
   const [deleteInstanceFiles, setDeleteInstanceFiles] = useState(false);
@@ -49,6 +62,13 @@ export function InstancesPage() {
   const [preload, setPreload] = useState<PreloadState>({
     status: "idle",
     step: "",
+    error: null,
+  });
+  const [importProgress, setImportProgress] = useState<ImportProgressState>({
+    active: false,
+    current: 0,
+    total: 0,
+    fileName: "",
     error: null,
   });
 
@@ -66,13 +86,7 @@ export function InstancesPage() {
   });
 
   const exportMutation = useMutation({
-    mutationFn: ({
-      instanceId,
-      outputPath,
-    }: {
-      instanceId: string;
-      outputPath: string;
-    }) => api.instances.exportZip(instanceId, outputPath),
+    mutationFn: (input: ExportInstanceZipInput) => api.instances.exportZip(input),
   });
 
   const handleCreate = async () => {
@@ -205,6 +219,80 @@ export function InstancesPage() {
     }
   };
 
+  const scanImportedInstanceContent = async (
+    instance: Instance,
+    auditAfterScan: boolean
+  ) => {
+    setSelectedInstance(instance.id);
+
+    const [modsResult, resourcePacksResult, shaderPacksResult, datapacksResult, configResult] =
+      await Promise.allSettled([
+        api.mods.scan(instance.id),
+        api.packs.scan(instance.id, "resourcePack"),
+        api.packs.scan(instance.id, "shaderPack"),
+        api.packs.scan(instance.id, "datapack"),
+        api.configs.scanTree(getResolvedConfigPath(instance)),
+      ]);
+
+    if (configResult.status === "fulfilled") {
+      setConfigTree(configResult.value);
+    }
+
+    if (auditAfterScan && modsResult.status === "fulfilled") {
+      await api.mods.checkIntegrity(instance.id);
+    }
+
+    const failures = [
+      preloadFailure("Mods", modsResult),
+      preloadFailure("Resource packs", resourcePacksResult),
+      preloadFailure("Shader packs", shaderPacksResult),
+      preloadFailure("Datapacks", datapacksResult),
+      preloadFailure("Configs", configResult),
+    ].filter(Boolean);
+
+    await Promise.allSettled([
+      queryClient.invalidateQueries({ queryKey: ["instances"] }),
+      queryClient.invalidateQueries({ queryKey: ["instance", instance.id] }),
+      queryClient.invalidateQueries({ queryKey: ["mods", instance.id] }),
+      queryClient.invalidateQueries({
+        queryKey: ["mod-integrity-audit", instance.id],
+      }),
+      queryClient.invalidateQueries({ queryKey: ["logs"] }),
+      queryClient.invalidateQueries({
+        queryKey: ["packs", instance.id, "resourcePack"],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["packs", instance.id, "shaderPack"],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["packs", instance.id, "datapack"],
+      }),
+      queryClient.invalidateQueries({ queryKey: ["categories", instance.id] }),
+      queryClient.prefetchQuery({
+        queryKey: ["mods", instance.id],
+        queryFn: () => api.mods.list(instance.id),
+      }),
+      queryClient.prefetchQuery({
+        queryKey: ["packs", instance.id, "resourcePack"],
+        queryFn: () => api.packs.list(instance.id, "resourcePack"),
+      }),
+      queryClient.prefetchQuery({
+        queryKey: ["packs", instance.id, "shaderPack"],
+        queryFn: () => api.packs.list(instance.id, "shaderPack"),
+      }),
+      queryClient.prefetchQuery({
+        queryKey: ["packs", instance.id, "datapack"],
+        queryFn: () => api.packs.list(instance.id, "datapack"),
+      }),
+    ]);
+
+    if (failures.length > 0) {
+      throw new Error(
+        `The ZIP imported, but some content could not be read:\n${failures.join("\n")}`
+      );
+    }
+  };
+
   const handlePickCreateDir = async () => {
     const selected = await open({ directory: true, multiple: false });
     if (selected && typeof selected === "string") {
@@ -228,11 +316,64 @@ export function InstancesPage() {
     const name = prompt("Instance name:", "Imported Modpack");
     if (!name) return;
 
-    await api.instances.importZip(name, file, dest);
-    queryClient.invalidateQueries({ queryKey: ["instances"] });
+    setImportProgress({
+      active: true,
+      current: 0,
+      total: 4,
+      fileName: "Preparing import destination...",
+      error: null,
+    });
+
+    try {
+      setImportProgress({
+        active: true,
+        current: 1,
+        total: 4,
+        fileName: "Importing ZIP archive and Modly metadata...",
+        error: null,
+      });
+      const importedInstance = await api.instances.importZip(name, file, dest);
+
+      setImportProgress({
+        active: true,
+        current: 2,
+        total: 4,
+        fileName: "Reading imported mods, packs, and configs...",
+        error: null,
+      });
+      await scanImportedInstanceContent(importedInstance, settings.autoAuditAfterScan);
+
+      setImportProgress({
+        active: true,
+        current: 3,
+        total: 4,
+        fileName: "Refreshing imported instances...",
+        error: null,
+      });
+      await queryClient.invalidateQueries({ queryKey: ["instances"] });
+
+      setImportProgress({
+        active: false,
+        current: 0,
+        total: 0,
+        fileName: "",
+        error: null,
+      });
+    } catch (error) {
+      setImportProgress({
+        active: true,
+        current: 3,
+        total: 4,
+        fileName: "Import failed",
+        error: String(error),
+      });
+    }
   };
 
-  const handleExport = async (instance: Instance) => {
+  const handleExport = async (
+    instance: Instance,
+    options: Omit<ExportInstanceZipInput, "instanceId" | "outputPath">
+  ) => {
     const settings = await api.settings.get();
     const exportPath = await save({
       defaultPath: buildExportDefaultPath(
@@ -241,12 +382,17 @@ export function InstancesPage() {
       ),
       filters: [{ name: "ZIP Archive", extensions: ["zip"] }],
     });
-    if (!exportPath) return;
+    if (!exportPath) {
+      setPendingExportInstance(null);
+      return;
+    }
 
     await exportMutation.mutateAsync({
       instanceId: instance.id,
       outputPath: exportPath,
+      ...options,
     });
+    setPendingExportInstance(null);
   };
 
   const confirmDelete = (instance: Instance) => {
@@ -292,11 +438,15 @@ export function InstancesPage() {
         description={description}
         controls={
           <>
-            <Button variant="outline" onClick={handleImport}>
-              <Import className="h-4 w-4" />
-              Import ZIP
+            <Button variant="outline" onClick={handleImport} disabled={importProgress.active}>
+              {importProgress.active ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Import className="h-4 w-4" />
+              )}
+              {importProgress.active ? "Importing ZIP" : "Import ZIP"}
             </Button>
-            <Button onClick={() => setShowCreate(true)}>
+            <Button onClick={() => setShowCreate(true)} disabled={importProgress.active}>
               <Plus className="h-4 w-4" />
               New Instance
             </Button>
@@ -397,6 +547,18 @@ export function InstancesPage() {
         </Card>
       )}
 
+      <ImportProgressOverlay
+        state={importProgress}
+        onClose={() =>
+          setImportProgress({
+            active: false,
+            current: 0,
+            total: 0,
+            fileName: "",
+            error: null,
+          })
+        }
+      />
       <InstancePreloadOverlay
         state={preload}
         onClose={() => setPreload({ status: "idle", step: "", error: null })}
@@ -435,6 +597,7 @@ export function InstancesPage() {
                 setSelectedInstance(instance.id);
               }}
               onEdit={() => setEditingInstance(instance)}
+              onExport={() => setPendingExportInstance(instance)}
               onOpenFolder={() => api.files.openInExplorer(instance.gameDir)}
               onDuplicate={async () => {
                 const name = `${instance.name} (Copy)`;
@@ -500,6 +663,13 @@ export function InstancesPage() {
           </label>
         </div>
       </ConfirmDialog>
+      <ExportZipDialog
+        instance={pendingExportInstance}
+        open={pendingExportInstance !== null}
+        exporting={exportMutation.isPending}
+        onOpenChange={(open) => !open && setPendingExportInstance(null)}
+        onConfirm={handleExport}
+      />
       <InstanceEditDialog
         instance={editingInstance}
         open={!!editingInstance}
@@ -510,7 +680,9 @@ export function InstancesPage() {
           setEditingInstance(null);
         }}
         saving={updateMutation.isPending}
-        onExport={handleExport}
+        onExport={async (instance) => {
+          setPendingExportInstance(instance);
+        }}
         exporting={exportMutation.isPending}
       />
     </div>
@@ -523,6 +695,76 @@ function preloadFailure(
 ): string | null {
   if (result.status === "fulfilled") return null;
   return `${label}: ${String(result.reason)}`;
+}
+
+function ImportProgressOverlay({
+  state,
+  onClose,
+}: {
+  state: ImportProgressState;
+  onClose: () => void;
+}) {
+  if (!state.active) return null;
+
+  const loading = state.error === null;
+  const completed = Math.min(state.current + 1, state.total || 1);
+  const value = Math.round((completed / Math.max(state.total, 1)) * 100);
+
+  return (
+    <div
+      className="fixed inset-0 z-[95] flex items-center justify-center bg-black/75 px-4"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="import-progress-title"
+      aria-describedby="import-progress-description"
+    >
+      <div className="w-full max-w-md rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-6 shadow-2xl">
+        <div className="flex items-start gap-4">
+          <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-[var(--color-muted)]">
+            {loading ? (
+              <Loader2 className="h-5 w-5 animate-spin text-[var(--color-primary)]" />
+            ) : (
+              <XCircle className="h-5 w-5 text-[var(--color-destructive)]" />
+            )}
+          </div>
+          <div className="min-w-0 flex-1">
+            <h2 id="import-progress-title" className="text-base font-semibold">
+              {loading ? "Importing ZIP" : "Import needs attention"}
+            </h2>
+            <p
+              id="import-progress-description"
+              className="mt-2 text-sm text-[var(--color-muted-foreground)]"
+            >
+              {loading
+                ? "Importing the archive and applying Modly metadata. Keep the app open."
+                : "The ZIP import did not finish. Review the error below."}
+            </p>
+            <div className="mt-5 space-y-3">
+              <Progress value={loading ? value : 100} />
+              <div className="flex justify-between gap-3 text-sm">
+                <span className="min-w-0 truncate text-[var(--color-foreground)]">
+                  {state.fileName || "Preparing..."}
+                </span>
+                <span className="shrink-0 text-[var(--color-muted-foreground)]">
+                  {completed} / {Math.max(state.total, 1)}
+                </span>
+              </div>
+            </div>
+            {state.error && (
+              <pre className="mt-4 max-h-32 overflow-auto whitespace-pre-wrap rounded-md border border-[var(--color-border)] bg-[var(--color-background)] p-3 text-xs text-[var(--color-muted-foreground)]">
+                {state.error}
+              </pre>
+            )}
+            {!loading && (
+              <Button className="mt-5" onClick={onClose}>
+                Close
+              </Button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function InstancePreloadOverlay({

@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AppSettings,
   CreateInstanceInput,
+  ExportInstanceZipInput,
   Instance,
   LaunchConfig,
   LaunchStatus,
@@ -54,8 +55,8 @@ export const api = {
       invoke<void>("delete_instance", { id, deleteFiles }),
     duplicate: (id: string, newName: string, newGameDir: string) =>
       invoke<Instance>("duplicate_instance", { id, newName, newGameDir }),
-    exportZip: (instanceId: string, outputPath: string) =>
-      invoke<void>("export_instance_zip", { instanceId, outputPath }),
+    exportZip: (input: ExportInstanceZipInput) =>
+      invoke<void>("export_instance_zip", { input }),
     importZip: (name: string, archivePath: string, destParent: string) =>
       invoke<Instance>("import_instance_zip", { name, archivePath, destParent }),
     backup: (instanceId: string, outputPath: string) =>

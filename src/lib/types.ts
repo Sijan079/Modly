@@ -400,3 +400,14 @@ export interface UpdateInstanceInput {
   dataPacksPath?: string | null;
   configPath?: string | null;
 }
+
+export interface ExportInstanceZipInput {
+  instanceId: string;
+  outputPath: string;
+  includeMods: boolean;
+  includeConfigs: boolean;
+  includeResourcePacks: boolean;
+  includeShaderPacks: boolean;
+  includeDatapacks: boolean;
+  includeManifest: boolean;
+}

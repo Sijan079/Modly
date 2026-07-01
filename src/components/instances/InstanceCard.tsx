@@ -1,4 +1,4 @@
-import { Copy, FolderOpen, Package, Pencil, Trash2 } from "lucide-react";
+import { Copy, Download, FolderOpen, Package, Pencil, Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ interface InstanceCardProps {
   selected?: boolean;
   onClick: () => void;
   onEdit: () => void;
+  onExport: () => void;
   onOpenFolder: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
@@ -21,6 +22,7 @@ export function InstanceCard({
   selected,
   onClick,
   onEdit,
+  onExport,
   onOpenFolder,
   onDuplicate,
   onDelete,
@@ -63,6 +65,9 @@ export function InstanceCard({
             title="Edit instance"
           >
             <Pencil className="h-3.5 w-3.5" />
+          </Button>
+          <Button size="sm" variant="outline" onClick={onExport} title="Export ZIP">
+            <Download className="h-3.5 w-3.5" />
           </Button>
           <Button size="sm" variant="outline" onClick={onOpenFolder}>
             <FolderOpen className="h-3.5 w-3.5" />
