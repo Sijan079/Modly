@@ -30,13 +30,20 @@
   </tr>
   <tr>
     <td width="50%">
+      <strong>Relationships</strong><br />
+      <img src="docs/screenshots/relationships.png" alt="Modly relationships page" />
+    </td>
+    <td width="50%">
       <strong>Updates</strong><br />
       <img src="docs/screenshots/updates.png" alt="Modly updates page" />
     </td>
+  </tr>
+  <tr>
     <td width="50%">
       <strong>Configs</strong><br />
       <img src="docs/screenshots/configs.png" alt="Modly configs page" />
     </td>
+    <td width="50%"></td>
   </tr>
 </table>
 
@@ -44,7 +51,9 @@
 
 - Create, duplicate, import, export, and organize Minecraft instances your way.
 - Sort installed mods faster, tag them, and filter what matters in seconds.
-- Track mod dependencies and add-on relationships in both table and graph views.
+- Explore a graph-first Relationships workspace powered by Cytoscape.js with pan, zoom, fit-to-view, search focus, and isolated-mod filtering.
+- Track manual mod relationships visually as dependency and add-on links without needing to preselect a mod first.
+- Click any mod in the graph to edit its outgoing relationships in a lightweight table modal with add, save, and bulk-delete flows.
 - Save mod ideas as suggestions, preview their source pages, and turn them into installed mods when you're ready.
 - Check for compatible updates and install them with less guesswork.
 - Catch broken or missing mod files before they ruin a play session.
