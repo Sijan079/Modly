@@ -44,10 +44,13 @@
 
 - Create, duplicate, import, export, and organize Minecraft instances your way.
 - Sort installed mods faster, tag them, and filter what matters in seconds.
+- Track mod dependencies and add-on relationships in both table and graph views.
 - Save mod ideas as suggestions, preview their source pages, and turn them into installed mods when you're ready.
 - Check for compatible updates and install them with less guesswork.
 - Catch broken or missing mod files before they ruin a play session.
-- Manage resource packs, shader packs, and configs alongside each instance.
+- Manage DSR packs across resource packs, shader packs, and datapacks for each instance.
+- Override per-instance resource pack, shader pack, datapack, and config paths when a pack uses a non-default folder layout.
+- Delete instance categories safely by clearing affected mods or bulk-moving them into a replacement category.
 - Keep a simple local activity trail so it is easier to see what changed.
 
 ## Install

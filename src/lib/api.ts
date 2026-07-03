@@ -11,6 +11,7 @@ import type {
   ModFile,
   ModIntegrityAudit,
   ModMetadata,
+  ModRelationshipGraph,
   ModRelationshipsForMod,
   ModSuggestion,
   UpdateModMetadataInput,
@@ -89,6 +90,8 @@ export const api = {
       invoke<void>("export_mod_list_html", { input }),
     updateMetadata: (input: UpdateModMetadataInput) =>
       invoke<ModFile>("update_mod_metadata", { input }),
+    relationshipGraph: (instanceId: string) =>
+      invoke<ModRelationshipGraph>("list_instance_relationship_graph", { instanceId }),
     relationships: (modId: string) =>
       invoke<ModRelationshipsForMod>("list_mod_relationships", { modId }),
     upsertSuggestion: (input: UpsertModSuggestionInput) =>

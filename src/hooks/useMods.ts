@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type {
+  ModRelationshipGraph,
   ModRelationshipsForMod,
   UpdateModMetadataInput,
   UpsertModSuggestionInput,
@@ -152,6 +153,7 @@ export function useUpdateModMetadata() {
     mutationFn: (input: UpdateModMetadataInput) => api.mods.updateMetadata(input),
     onSuccess: (mod) => {
       qc.invalidateQueries({ queryKey: ["mods", mod.instanceId] });
+      qc.invalidateQueries({ queryKey: ["instance-relationship-graph", mod.instanceId] });
       qc.invalidateQueries({ queryKey: ["mod-relationships", mod.id] });
       qc.invalidateQueries({ queryKey: ["instances"] });
       qc.invalidateQueries({ queryKey: ["categories", mod.instanceId] });
@@ -164,6 +166,14 @@ export function useModRelationships(modId: string | null) {
     queryKey: ["mod-relationships", modId],
     queryFn: () => (modId ? api.mods.relationships(modId) : null),
     enabled: !!modId,
+  });
+}
+
+export function useInstanceRelationshipGraph(instanceId: string | null) {
+  return useQuery<ModRelationshipGraph | null>({
+    queryKey: ["instance-relationship-graph", instanceId],
+    queryFn: () => (instanceId ? api.mods.relationshipGraph(instanceId) : null),
+    enabled: !!instanceId,
   });
 }
 

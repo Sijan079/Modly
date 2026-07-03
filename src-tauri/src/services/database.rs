@@ -13,8 +13,9 @@ use crate::models::instance::{CreateInstanceInput, Instance, LoaderType, UpdateI
 use crate::models::launch::LaunchConfig;
 use crate::models::mod_metadata::{
     ModFile, ModIntegrityAudit, ModIntegrityAuditStatus, ModIntegrityReport, ModMetadata,
-    ModRelationshipEdge, ModRelationshipType, ModRelationshipsForMod, ModSide, ModSuggestion,
-    UpdateModMetadataInput, UpdateModRelationshipInput, UpsertModSuggestionInput,
+    ModRelationshipEdge, ModRelationshipGraph, ModRelationshipGraphNode, ModRelationshipType,
+    ModRelationshipsForMod, ModSide, ModSuggestion, UpdateModMetadataInput,
+    UpdateModRelationshipInput, UpsertModSuggestionInput,
 };
 use crate::models::pack_item::{PackItem, PackItemMetadata, PackType, UpdatePackItemMetadataInput};
 use crate::models::settings::AppSettings;
@@ -750,6 +751,60 @@ impl Database {
             mod_id: source.id,
             outgoing,
             incoming,
+        })
+    }
+
+    pub fn get_instance_relationship_graph(&self, instance_id: &str) -> Result<ModRelationshipGraph> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let nodes = {
+            let mut stmt = conn.prepare(
+                "SELECT
+                    id,
+                    instance_id,
+                    COALESCE(json_extract(metadata_json, '$.name'), file_name),
+                    file_name,
+                    source_url
+                 FROM mods
+                 WHERE instance_id = ?1
+                 ORDER BY COALESCE(json_extract(metadata_json, '$.name'), file_name) COLLATE NOCASE ASC, id ASC",
+            )?;
+            let rows = stmt.query_map(params![instance_id], |row| {
+                Ok(ModRelationshipGraphNode {
+                    id: row.get(0)?,
+                    instance_id: row.get(1)?,
+                    label: row.get(2)?,
+                    file_name: row.get(3)?,
+                    source_url: row.get(4)?,
+                })
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+
+        let edges = {
+            let mut stmt = conn.prepare(
+                "SELECT
+                    mr.id,
+                    mr.instance_id,
+                    mr.source_mod_id,
+                    COALESCE(json_extract(source.metadata_json, '$.name'), source.file_name),
+                    mr.target_mod_id,
+                    COALESCE(json_extract(target.metadata_json, '$.name'), target.file_name),
+                    mr.relationship_type,
+                    mr.created_at
+                 FROM mod_relationships mr
+                 JOIN mods source ON source.id = mr.source_mod_id
+                 JOIN mods target ON target.id = mr.target_mod_id
+                 WHERE mr.instance_id = ?1
+                 ORDER BY mr.created_at ASC, mr.id ASC",
+            )?;
+            let rows = stmt.query_map(params![instance_id], Self::row_to_mod_relationship_edge)?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+
+        Ok(ModRelationshipGraph {
+            instance_id: instance_id.to_string(),
+            nodes,
+            edges,
         })
     }
 
@@ -1750,6 +1805,47 @@ mod tests {
             reverse.incoming[0].relationship_type,
             ModRelationshipType::Dependency
         );
+    }
+
+    #[test]
+    fn lists_instance_relationship_graph_for_manual_edges() {
+        let db = test_db();
+        let (instance_id, source_id, dependency_id, addon_base_id, _other_instance_mod_id) =
+            seed_relationship_fixture(&db);
+
+        db.replace_mod_relationships(
+            &source_id,
+            &[
+                UpdateModRelationshipInput {
+                    target_mod_id: dependency_id.clone(),
+                    relationship_type: ModRelationshipType::Dependency,
+                },
+                UpdateModRelationshipInput {
+                    target_mod_id: addon_base_id.clone(),
+                    relationship_type: ModRelationshipType::AddonFor,
+                },
+            ],
+        )
+        .expect("relationships should save");
+
+        let graph = db
+            .get_instance_relationship_graph(&instance_id)
+            .expect("graph should load");
+
+        assert_eq!(graph.instance_id, instance_id);
+        assert_eq!(graph.nodes.len(), 3);
+        assert_eq!(graph.edges.len(), 2);
+        assert!(graph.nodes.iter().any(|node| node.id == source_id));
+        assert!(graph
+            .edges
+            .iter()
+            .any(|edge| edge.target_mod_id == dependency_id
+                && edge.relationship_type == ModRelationshipType::Dependency));
+        assert!(graph
+            .edges
+            .iter()
+            .any(|edge| edge.target_mod_id == addon_base_id
+                && edge.relationship_type == ModRelationshipType::AddonFor));
     }
 
     #[test]

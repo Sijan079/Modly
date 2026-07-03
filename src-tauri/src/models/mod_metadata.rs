@@ -234,6 +234,24 @@ pub struct ModRelationshipsForMod {
     pub incoming: Vec<ModRelationshipEdge>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModRelationshipGraphNode {
+    pub id: String,
+    pub instance_id: String,
+    pub label: String,
+    pub file_name: String,
+    pub source_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModRelationshipGraph {
+    pub instance_id: String,
+    pub nodes: Vec<ModRelationshipGraphNode>,
+    pub edges: Vec<ModRelationshipEdge>,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum LoaderKind {

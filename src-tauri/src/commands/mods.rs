@@ -10,7 +10,8 @@ use zip::ZipArchive;
 
 use crate::models::mod_metadata::{
     ModFile, ModIntegrityAudit, ModIntegrityAuditStatus, ModIntegrityReport, ModIntegrityStatus,
-    ModRelationshipsForMod, ModSuggestion, UpdateModMetadataInput, UpsertModSuggestionInput,
+    ModRelationshipGraph, ModRelationshipsForMod, ModSuggestion, UpdateModMetadataInput,
+    UpsertModSuggestionInput,
 };
 use crate::services::hash_service::hash_file;
 use crate::services::mod_parser::parse_mod_jar;
@@ -378,6 +379,18 @@ pub async fn list_mod_relationships(mod_id: String) -> Result<ModRelationshipsFo
         state
             .db
             .get_mod_relationships(&mod_id)
+            .map_err(|e| e.to_string())
+    })
+}
+
+#[command]
+pub async fn list_instance_relationship_graph(
+    instance_id: String,
+) -> Result<ModRelationshipGraph, String> {
+    with_state(|state| {
+        state
+            .db
+            .get_instance_relationship_graph(&instance_id)
             .map_err(|e| e.to_string())
     })
 }

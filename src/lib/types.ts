@@ -182,6 +182,20 @@ export interface ModRelationshipsForMod {
   incoming: ModRelationshipEdge[];
 }
 
+export interface ModRelationshipGraphNode {
+  id: string;
+  instanceId: string;
+  label: string;
+  fileName: string;
+  sourceUrl: string | null;
+}
+
+export interface ModRelationshipGraph {
+  instanceId: string;
+  nodes: ModRelationshipGraphNode[];
+  edges: ModRelationshipEdge[];
+}
+
 export interface MinecraftScanResult {
   minecraftDir: string | null;
   detectedPaths: DetectedPath[];
