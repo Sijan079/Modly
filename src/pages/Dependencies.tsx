@@ -12,6 +12,7 @@ import { PageSearchBar } from "@/components/layout/PageSearchBar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ThemedSelect } from "@/components/ui/themed-select";
 import {
   Dialog,
   DialogContent,
@@ -22,10 +23,13 @@ import {
 import { useInstances } from "@/hooks/useInstances";
 import {
   useInstanceRelationshipGraph,
+  useModrinthProjects,
   useMods,
+  useScanMods,
   useUpdateModMetadata,
 } from "@/hooks/useMods";
-import { useQuery } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
+import { api } from "@/lib/api";
 import type {
   ModFile,
   ModRelationshipEdge,
@@ -58,6 +62,31 @@ type GraphFocusState = {
   focusedNodeId: string | null;
   highlightedNodeIds: Set<string>;
 };
+
+type ToastState = { id: number; message: string } | null;
+
+type RescanStep = "scanning" | "refreshing-mods" | "rebuilding-graph";
+
+const RESCAN_STEPS: { key: RescanStep; label: string; description: string; progress: number }[] = [
+  {
+    key: "scanning",
+    label: "Scanning mod jars",
+    description: "Reading installed mods and extracting metadata.",
+    progress: 34,
+  },
+  {
+    key: "refreshing-mods",
+    label: "Refreshing mod records",
+    description: "Reloading the saved mod list for this instance.",
+    progress: 67,
+  },
+  {
+    key: "rebuilding-graph",
+    label: "Rebuilding relationship graph",
+    description: "Matching detected dependencies and rebuilding links.",
+    progress: 100,
+  },
+];
 
 const ROLE_COLORS: Record<GraphNodeRole, string> = {
   core: "#6f7bf7",
@@ -264,6 +293,7 @@ function GraphFilterMenu({
 }
 
 export function RelationshipsPage() {
+  const queryClient = useQueryClient();
   const { data: instances = [] } = useInstances();
   const { selectedInstanceId, setSelectedInstance } = useAppStore();
   const instanceId = selectedInstanceId ?? instances[0]?.id ?? null;
@@ -272,11 +302,15 @@ export function RelationshipsPage() {
   const { data: mods = [] } = useMods(instanceId);
   const { data: graph = null, isLoading: graphLoading } =
     useInstanceRelationshipGraph(instanceId);
+  const scanModsMutation = useScanMods();
 
   const [edgeFilter, setEdgeFilter] = useState<EdgeFilter>("all");
   const [activeModId, setActiveModId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [showIsolated, setShowIsolated] = useState(false);
+  const [toast, setToast] = useState<ToastState>(null);
+  const [isRescanning, setIsRescanning] = useState(false);
+  const [rescanStep, setRescanStep] = useState<RescanStep>("scanning");
 
   const searchedMod = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -301,29 +335,21 @@ export function RelationshipsPage() {
     return new Map(entries);
   }, [mods]);
 
-  const { data: modIconByModId = new Map<string, string | null>() } = useQuery({
-    queryKey: [
-      "modrinth-graph-icons",
-      Array.from(modrinthProjectByModId.entries()).sort(([a], [b]) => a.localeCompare(b)),
-    ],
-    enabled: modrinthProjectByModId.size > 0,
-    queryFn: async () => {
-      const results = await Promise.all(
-        Array.from(modrinthProjectByModId.entries()).map(async ([modId, projectId]) => {
-          try {
-            const response = await fetch(`https://api.modrinth.com/v2/project/${projectId}`);
-            if (!response.ok) return [modId, null] as const;
-            const project = (await response.json()) as { icon_url?: string | null };
-            return [modId, project.icon_url ?? null] as const;
-          } catch {
-            return [modId, null] as const;
-          }
-        })
-      );
-      return new Map(results);
-    },
-    staleTime: 1000 * 60 * 30,
-  });
+  const projectIds = useMemo(
+    () => Array.from(new Set(modrinthProjectByModId.values())).sort(),
+    [modrinthProjectByModId]
+  );
+  const { data: modrinthProjects = [] } = useModrinthProjects(projectIds);
+  const modIconByModId = useMemo(
+    () =>
+      new Map(
+        Array.from(modrinthProjectByModId.entries()).map(([modId, projectId]) => [
+          modId,
+          modrinthProjects.find((project) => project.projectId === projectId)?.iconUrl ?? null,
+        ])
+      ),
+    [modrinthProjectByModId, modrinthProjects]
+  );
 
   const focusModId = activeModId ?? searchedMod?.id ?? null;
   const selectedMod = mods.find((mod) => mod.id === focusModId) ?? null;
@@ -345,14 +371,65 @@ export function RelationshipsPage() {
     [focusModId, graphState.visibleEdges]
   );
 
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), 2600);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  const showToast = (message: string) => {
+    setToast({ id: Date.now(), message });
+  };
+
+  const activeRescanStep =
+    RESCAN_STEPS.find((step) => step.key === rescanStep) ?? RESCAN_STEPS[0];
+
+  const handleRescanMods = async () => {
+    if (!instanceId || !selectedInstance || isRescanning) return;
+
+    setIsRescanning(true);
+    setRescanStep("scanning");
+    setActiveModId(null);
+
+    try {
+      await scanModsMutation.mutateAsync(instanceId);
+
+      setRescanStep("refreshing-mods");
+      await queryClient.refetchQueries({
+        queryKey: ["mods", instanceId],
+        exact: true,
+      });
+
+      setRescanStep("rebuilding-graph");
+      await queryClient.refetchQueries({
+        queryKey: ["instance-relationship-graph", instanceId],
+        exact: true,
+      });
+
+      await api.files.appendLog(
+        "info",
+        `Relationship rescan completed: ${selectedInstance.name}`,
+        selectedInstance.name
+      );
+      await queryClient.invalidateQueries({ queryKey: ["logs"] });
+      showToast("Relationships rebuilt.");
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to rescan relationships.";
+      showToast(message);
+    } finally {
+      setIsRescanning(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-5">
       <PageShell
         title="Relationships"
         description={
           selectedInstance
-            ? `Explore the manual relationship graph for ${selectedInstance.name}.`
-            : "Explore manual dependency and add-on relationships for the selected instance."
+            ? `${selectedInstance.name} relationships`
+            : "Manual mod relationships"
         }
         controls={
           <>
@@ -362,19 +439,22 @@ export function RelationshipsPage() {
               placeholder="Search mods in graph..."
               className="sm:max-w-xs"
             />
-            <select
-              className="h-9 rounded-md border border-[var(--color-input)] bg-[var(--color-muted)] px-3 text-sm"
+            <ThemedSelect
+              className="min-w-[11rem]"
               value={instanceId ?? ""}
-              onChange={(event) => setSelectedInstance(event.target.value || null)}
+              onValueChange={(value) => setSelectedInstance(value || null)}
               aria-label="Select instance"
+              options={[{ value: "", label: "Select instance" }, ...instances.map((instance) => ({ value: instance.id, label: instance.name }))]}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleRescanMods}
+              disabled={!instanceId || isRescanning}
             >
-              <option value="">Select instance</option>
-              {instances.map((instance) => (
-                <option key={instance.id} value={instance.id}>
-                  {instance.name}
-                </option>
-              ))}
-            </select>
+              {isRescanning ? "Rescanning..." : "Rescan Mods"}
+            </Button>
             <FilterTabs value={edgeFilter} onChange={setEdgeFilter} />
           </>
         }
@@ -386,7 +466,7 @@ export function RelationshipsPage() {
             Select an instance to inspect relationships.
           </CardContent>
         </Card>
-      ) : graphLoading ? (
+      ) : isRescanning ? null : graphLoading ? (
         <Card>
           <CardContent className="flex h-[36rem] items-center justify-center text-[var(--color-muted-foreground)]">
             Loading relationship graph...
@@ -443,7 +523,76 @@ export function RelationshipsPage() {
           if (!open) setActiveModId(null);
         }}
       />
+
+      <RescanProgressModal
+        open={isRescanning}
+        instanceName={selectedInstance?.name ?? "instance"}
+        step={activeRescanStep}
+      />
+
+      {toast && (
+        <div className="pointer-events-none fixed right-5 top-5 z-50 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-4 py-3 text-sm text-[var(--color-foreground)] shadow-xl">
+          {toast.message}
+        </div>
+      )}
     </div>
+  );
+}
+
+function RescanProgressModal({
+  open,
+  instanceName,
+  step,
+}: {
+  open: boolean;
+  instanceName: string;
+  step: (typeof RESCAN_STEPS)[number];
+}) {
+  return (
+    <Dialog open={open}>
+      <DialogContent
+        className="max-w-md"
+        onPointerDownOutside={(event) => event.preventDefault()}
+        onEscapeKeyDown={(event) => event.preventDefault()}
+      >
+        <DialogHeader>
+          <DialogTitle>Rebuilding relationships</DialogTitle>
+          <DialogDescription>
+            {instanceName}: {step.description}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-sm">
+              <span>{step.label}</span>
+              <span>{step.progress}%</span>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-[var(--color-muted)]">
+              <div
+                className="h-full rounded-full bg-[var(--color-primary)] transition-all duration-300"
+                style={{ width: `${step.progress}%` }}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-2 text-sm text-[var(--color-muted-foreground)]">
+            {RESCAN_STEPS.map((candidate) => (
+              <div key={candidate.key} className="flex items-center justify-between gap-3">
+                <span>{candidate.label}</span>
+                <span>
+                  {candidate.progress < step.progress
+                    ? "Done"
+                    : candidate.key === step.key
+                      ? "Working..."
+                      : "Queued"}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -498,13 +647,12 @@ function EmptyGraphState({
         <div className="max-w-2xl space-y-2">
           <h2 className="text-2xl font-semibold">No manual relationships yet</h2>
           <p className="text-sm text-[var(--color-muted-foreground)]">
-            Relationships only visualizes the manual links you create for {selectedInstanceName}.
-            Add the first dependency or add-on relationship to bring the graph to life.
+            {selectedInstanceName}
           </p>
         </div>
         <Button type="button" onClick={onOpenFirst} disabled={mods.length === 0}>
           <Plus className="h-4 w-4" />
-          {mods.length === 0 ? "No mods available" : "Open a mod to add links"}
+          {mods.length === 0 ? "No mods available" : "Open a mod"}
         </Button>
       </CardContent>
     </Card>
@@ -864,18 +1012,16 @@ function RelationshipModal({
                               />
                             </td>
                             <td className="px-3 py-2">
-                              <select
-                                className="flex h-9 w-full rounded-md border border-[var(--color-input)] bg-[var(--color-muted)] px-3 text-sm"
+                              <ThemedSelect
+                                className="w-full"
                                 value={row.relationshipType}
-                                onChange={(event) =>
+                                onValueChange={(value) =>
                                   updateRelatedMod(index, {
-                                    relationshipType: event.target.value as ModRelationshipType,
+                                    relationshipType: value as ModRelationshipType,
                                   })
                                 }
-                              >
-                                <option value="dependency">Dependency</option>
-                                <option value="addon_for">Add-on For</option>
-                              </select>
+                                options={[{ value: "dependency", label: "Dependency" }, { value: "addon_for", label: "Add-on For" }]}
+                              />
                             </td>
                           </tr>
                         ))}
@@ -908,18 +1054,12 @@ function RelatedModPicker({
   );
 
   return (
-    <select
-      className="flex h-9 w-full rounded-md border border-[var(--color-input)] bg-[var(--color-muted)] px-3 text-sm"
+    <ThemedSelect
+      className="w-full"
       value={value}
-      onChange={(event) => onChange(event.target.value)}
-    >
-      <option value="">Select related mod</option>
-      {availableOptions.map((candidate) => (
-        <option key={candidate.id} value={candidate.id}>
-          {getModDisplayName(candidate)}
-        </option>
-      ))}
-    </select>
+      onValueChange={onChange}
+      options={[{ value: "", label: "Select related mod" }, ...availableOptions.map((candidate) => ({ value: candidate.id, label: getModDisplayName(candidate) }))]}
+    />
   );
 }
 

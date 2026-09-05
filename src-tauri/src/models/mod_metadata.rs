@@ -96,6 +96,9 @@ pub struct ModMetadata {
     /// User-edited metadata; preserved across rescans when true.
     #[serde(default)]
     pub customized: bool,
+    /// Whether the name was inferred from the mod ID or filename.
+    #[serde(default)]
+    pub name_is_fallback: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,6 +119,16 @@ pub struct UpdateModMetadataInput {
     pub category_ids: Vec<String>,
     #[serde(default)]
     pub related_mods: Vec<UpdateModRelationshipInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkUpdateModMetadataInput {
+    pub instance_id: String,
+    pub mod_ids: Vec<String>,
+    pub category_ids: Vec<String>,
+    pub loader: LoaderKind,
+    pub side: ModSide,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,6 +168,8 @@ pub struct UpsertModSuggestionInput {
     #[serde(default)]
     pub authors: Vec<String>,
     pub loader: LoaderKind,
+    #[serde(default = "default_mod_side")]
+    pub side: ModSide,
     #[serde(default)]
     pub mod_id_field: Option<String>,
     #[serde(default)]

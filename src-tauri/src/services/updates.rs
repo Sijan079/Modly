@@ -5,14 +5,22 @@ use serde::Deserialize;
 use crate::models::instance::Instance;
 use crate::models::mod_metadata::{LoaderKind, ModFile};
 use crate::models::updates::{
-    SuggestionVersionOption, UpdateCandidate, UpdateFile, UpdateItemType, UpdateMatchConfidence,
-    UpdateRow, UpdateStatus,
+    ModrinthProjectSummary, SuggestionVersionOption, UpdateCandidate, UpdateFile, UpdateItemType,
+    UpdateMatchConfidence, UpdateRow, UpdateStatus,
 };
 
 const MODRINTH_API: &str = "https://api.modrinth.com/v2";
 
 pub struct UpdateService {
     client: Client,
+}
+
+/// Verified metadata for one installed file, resolved solely by its SHA-256 hash.
+#[derive(Debug, Clone)]
+pub struct ModrinthFileProjectMatch {
+    pub project: ModrinthProjectSummary,
+    pub version_id: String,
+    pub version_number: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,6 +76,27 @@ struct ModrinthSearchHit {
     title: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct ModrinthProject {
+    id: String,
+    title: String,
+    description: String,
+    #[serde(default)]
+    body: Option<String>,
+    #[serde(default)]
+    icon_url: Option<String>,
+    #[serde(default)]
+    downloads: Option<u64>,
+    #[serde(default)]
+    followers: Option<u64>,
+    #[serde(default)]
+    categories: Vec<String>,
+    #[serde(default)]
+    game_versions: Vec<String>,
+    #[serde(default)]
+    loaders: Vec<String>,
+}
+
 impl Default for UpdateService {
     fn default() -> Self {
         Self {
@@ -80,6 +109,50 @@ impl Default for UpdateService {
 }
 
 impl UpdateService {
+    /// Resolves a project only when a file's SHA-256 has an exact Modrinth match.
+    /// Unlike update checking, this deliberately never falls back to text search.
+    pub async fn project_by_file_hash(
+        &self,
+        hash: &str,
+    ) -> Result<Option<ModrinthFileProjectMatch>> {
+        let Some(version) = self.version_by_hash(hash).await? else {
+            return Ok(None);
+        };
+
+        Ok(self
+            .get_projects(&[version.project_id.clone()])
+            .await?
+            .into_iter()
+            .find(|project| project.project_id == version.project_id)
+            .map(|project| ModrinthFileProjectMatch {
+                project,
+                version_id: version.id,
+                version_number: version.version_number,
+            }))
+    }
+
+    pub async fn get_projects(
+        &self,
+        project_ids: &[String],
+    ) -> Result<Vec<ModrinthProjectSummary>> {
+        if project_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let ids_json = serde_json::to_string(project_ids)?;
+        let projects: Vec<ModrinthProject> = self
+            .client
+            .get(format!("{MODRINTH_API}/projects"))
+            .query(&[("ids", ids_json.as_str())])
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+
+        Ok(projects.into_iter().map(ModrinthProjectSummary::from).collect())
+    }
+
     pub async fn compatible_versions_for_project(
         &self,
         project_id: &str,
@@ -354,6 +427,23 @@ impl ModrinthVersion {
             .iter()
             .find(|file| file.primary)
             .or_else(|| self.files.first())
+    }
+}
+
+impl From<ModrinthProject> for ModrinthProjectSummary {
+    fn from(project: ModrinthProject) -> Self {
+        Self {
+            project_id: project.id,
+            title: project.title,
+            description: project.description,
+            body: project.body,
+            icon_url: project.icon_url,
+            downloads: project.downloads,
+            followers: project.followers,
+            categories: project.categories,
+            game_versions: project.game_versions,
+            loaders: project.loaders,
+        }
     }
 }
 

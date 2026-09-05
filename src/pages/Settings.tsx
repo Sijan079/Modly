@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { ThemedSelect } from "@/components/ui/themed-select";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -56,14 +57,14 @@ export function SettingsPage() {
     <div className="space-y-5">
       <PageShell
         title="Settings"
-        description="Tune planner defaults, scans, audits, and exports"
+        description="App settings"
       />
 
       <div className="grid gap-5 xl:grid-cols-[1fr_1fr]">
         <SettingsSection
           icon={FolderOpen}
           title="Workspace Defaults"
-          description="Choose where the planner looks for Minecraft files and modpack workspaces."
+          description="Default folders."
         >
           <PathField
             label="Minecraft Directory (.minecraft)"
@@ -82,7 +83,7 @@ export function SettingsPage() {
         <SettingsSection
           icon={FileArchive}
           title="Export Defaults"
-          description="Start export dialogs in the folders you actually use."
+          description="Export folders."
         >
           <PathField
             label="Modpack ZIP Export Folder"
@@ -101,18 +102,18 @@ export function SettingsPage() {
         <SettingsSection
           icon={SearchCheck}
           title="Scan & Preload"
-          description="Control when the catalog fills itself for planning."
+          description="Automatic scans."
         >
           <ToggleRow
             label="Preload new instances"
-            detail="Scan mods, DSR pack folders, and config when an instance is added."
+            detail="Scan after creating an instance."
             checked={form.autoScanOnInstanceAdd}
             onCheckedChange={(checked) => updateForm("autoScanOnInstanceAdd", checked)}
           />
           <Separator />
           <ToggleRow
             label="Rescan after adding mods"
-            detail="Refresh the Mods page after files are copied into an instance."
+            detail="Scan after copying mods."
             checked={form.autoScanAfterModAdd}
             onCheckedChange={(checked) => updateForm("autoScanAfterModAdd", checked)}
           />
@@ -121,11 +122,11 @@ export function SettingsPage() {
         <SettingsSection
           icon={ShieldCheck}
           title="Audit & Health"
-          description="Keep corrupted files and stale audit results visible."
+          description="Audit behavior."
         >
           <ToggleRow
             label="Audit after scans"
-            detail="Run the security audit automatically after scan workflows."
+            detail="Run audit after scans."
             checked={form.autoAuditAfterScan}
             onCheckedChange={(checked) => updateForm("autoAuditAfterScan", checked)}
           />
@@ -151,13 +152,34 @@ export function SettingsPage() {
         </SettingsSection>
 
         <SettingsSection
+          icon={FolderOpen}
+          title="Window"
+          description="Startup window mode."
+        >
+          <div className="space-y-2">
+            <Label>Launch mode</Label>
+            <ThemedSelect
+              className="w-full"
+              value={form.launchWindowMode}
+              onValueChange={(value) =>
+                updateForm(
+                  "launchWindowMode",
+                  value as AppSettings["launchWindowMode"]
+                )
+              }
+              options={[{ value: "maximized", label: "Maximized" }, { value: "fullscreen", label: "Fullscreen" }, { value: "windowed", label: "Windowed" }]}
+            />
+          </div>
+        </SettingsSection>
+
+        <SettingsSection
           icon={Tags}
           title="Catalog & Reports"
-          description="Choose what belongs in planning outputs."
+          description="Export options."
         >
           <ToggleRow
             label="Include disabled mods in exports"
-            detail="Useful when disabled files are still part of your planning notes."
+            detail="Include disabled mods."
             checked={form.includeDisabledModsInExports}
             onCheckedChange={(checked) =>
               updateForm("includeDisabledModsInExports", checked)
@@ -166,7 +188,7 @@ export function SettingsPage() {
           <Separator />
           <ToggleRow
             label="Include audit status in exports"
-            detail="Add latest audit status and date to generated reports when supported."
+            detail="Include audit status."
             checked={form.includeAuditInExports}
             onCheckedChange={(checked) => updateForm("includeAuditInExports", checked)}
           />
@@ -175,7 +197,7 @@ export function SettingsPage() {
         <SettingsSection
           icon={Database}
           title="Logs & Data"
-          description="Inspect where this planner stores local data."
+          description="Local data."
         >
           <UtilityButton
             icon={FolderOpen}
@@ -190,7 +212,7 @@ export function SettingsPage() {
             <div>
               <p className="text-sm font-medium">Activity history</p>
               <p className="mt-1 text-xs text-[var(--color-muted-foreground)]">
-                Logs keep recent planning actions visible on Dashboard and Logs.
+                Visible on Dashboard and Logs.
               </p>
             </div>
           </div>

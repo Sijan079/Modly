@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { ThemedSelect } from "@/components/ui/themed-select";
 import type {
   InstanceCategory,
   ModFile,
@@ -188,39 +189,32 @@ export function ModEditDialog({
             </div>
             <div className="space-y-2">
               <Label htmlFor="mod-loader">Loader</Label>
-              <select
+              <ThemedSelect
                 id="mod-loader"
-                className="flex h-9 w-full rounded-md border border-[var(--color-input)] bg-[var(--color-muted)] px-3 text-sm"
+                className="w-full"
                 value={loader}
-                onChange={(e) => setLoader(e.target.value as ModLoaderKind)}
-              >
-                {LOADERS.map((loaderOption) => (
-                  <option key={loaderOption} value={loaderOption}>
-                    {formatLoader(loaderOption)}
-                  </option>
-                ))}
-              </select>
+                onValueChange={(value) => setLoader(value as ModLoaderKind)}
+                options={LOADERS.map((value) => ({ value, label: formatLoader(value) }))}
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="mod-side">Side</Label>
-              <select
+              <ThemedSelect
                 id="mod-side"
-                className="flex h-9 w-full rounded-md border border-[var(--color-input)] bg-[var(--color-muted)] px-3 text-sm"
+                className="w-full"
                 value={side}
-                onChange={(e) => setSide(e.target.value as ModSide)}
-              >
-                {SIDES.map((sideOption) => (
-                  <option key={sideOption} value={sideOption}>
-                    {sideOption === "unknown"
+                onValueChange={(value) => setSide(value as ModSide)}
+                options={SIDES.map((value) => ({
+                  value,
+                  label: value === "unknown"
                       ? ""
-                      : sideOption === "client"
+                      : value === "client"
                       ? "Client"
-                      : sideOption === "server"
+                      : value === "server"
                         ? "Server"
-                        : "Both"}
-                  </option>
-                ))}
-              </select>
+                        : "Both",
+                }))}
+              />
             </div>
           </div>
           <div className="space-y-2">
@@ -312,18 +306,19 @@ export function ModEditDialog({
                         updateRelatedMod(index, { targetModId })
                       }
                     />
-                    <select
-                      className="flex h-9 w-full rounded-md border border-[var(--color-input)] bg-[var(--color-muted)] px-3 text-sm"
+                    <ThemedSelect
+                      className="w-full"
                       value={relatedMod.relationshipType}
-                      onChange={(event) =>
+                      onValueChange={(value) =>
                         updateRelatedMod(index, {
-                          relationshipType: event.target.value as ModRelationshipType,
+                          relationshipType: value as ModRelationshipType,
                         })
                       }
-                    >
-                      <option value="dependency">{getRelationshipLabel("dependency")}</option>
-                      <option value="addon_for">{getRelationshipLabel("addon_for")}</option>
-                    </select>
+                      options={[
+                        { value: "dependency", label: getRelationshipLabel("dependency") },
+                        { value: "addon_for", label: getRelationshipLabel("addon_for") },
+                      ]}
+                    />
                     <Button
                       type="button"
                       variant="ghost"

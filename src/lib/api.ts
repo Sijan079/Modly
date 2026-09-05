@@ -3,6 +3,7 @@ import type {
   AppSettings,
   CreateInstanceInput,
   ExportInstanceZipInput,
+  ExportModsZipInput,
   Instance,
   LaunchConfig,
   LaunchStatus,
@@ -15,6 +16,7 @@ import type {
   ModRelationshipsForMod,
   ModSuggestion,
   UpdateModMetadataInput,
+  BulkUpdateModMetadataInput,
   UpsertModSuggestionInput,
   InstanceCategory,
   CreateCategoryInput,
@@ -34,6 +36,7 @@ import type {
   UpdateTarget,
   SuggestionVersionOption,
   InstallSuggestionFromModrinthInput,
+  ModrinthProjectSummary,
 } from "./types";
 
 export const api = {
@@ -58,6 +61,8 @@ export const api = {
       invoke<Instance>("duplicate_instance", { id, newName, newGameDir }),
     exportZip: (input: ExportInstanceZipInput) =>
       invoke<void>("export_instance_zip", { input }),
+    exportModsZip: (input: ExportModsZipInput) =>
+      invoke<void>("export_mods_zip", { input }),
     importZip: (name: string, archivePath: string, destParent: string) =>
       invoke<Instance>("import_instance_zip", { name, archivePath, destParent }),
     backup: (instanceId: string, outputPath: string) =>
@@ -90,6 +95,8 @@ export const api = {
       invoke<void>("export_mod_list_html", { input }),
     updateMetadata: (input: UpdateModMetadataInput) =>
       invoke<ModFile>("update_mod_metadata", { input }),
+    bulkUpdateMetadata: (input: BulkUpdateModMetadataInput) =>
+      invoke<ModFile[]>("bulk_update_mod_metadata", { input }),
     relationshipGraph: (instanceId: string) =>
       invoke<ModRelationshipGraph>("list_instance_relationship_graph", { instanceId }),
     relationships: (modId: string) =>
@@ -142,6 +149,8 @@ export const api = {
         gameVersion: gameVersion ?? null,
         loader: loader ?? null,
       }),
+    modrinthProjects: (projectIds: string[]) =>
+      invoke<ModrinthProjectSummary[]>("get_modrinth_projects", { projectIds }),
     installSuggestion: (input: InstallSuggestionFromModrinthInput) =>
       invoke<ModFile>("install_suggestion_from_modrinth", { input }),
     log: (instanceId: string, level: string, message: string) =>

@@ -12,6 +12,7 @@ import { PageSearchBar } from "@/components/layout/PageSearchBar";
 import { PageToolbar } from "@/components/layout/PageToolbar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ThemedSelect } from "@/components/ui/themed-select";
 import {
   Dialog,
   DialogContent,
@@ -324,20 +325,14 @@ export function UpdatesPage() {
         }
         controls={
           <>
-            <select
-              className="h-9 rounded-md border border-[var(--color-input)] bg-[var(--color-muted)] px-3 text-sm"
+            <ThemedSelect
+              className="min-w-[11rem]"
               value={instanceId ?? ""}
-              onChange={(e) => setSelectedInstance(e.target.value || null)}
+              onValueChange={(value) => setSelectedInstance(value || null)}
               aria-label="Select instance"
               disabled={checkProgress.active || updateProgress.active}
-            >
-              <option value="">Select instance</option>
-              {instances.map((instance) => (
-                <option key={instance.id} value={instance.id}>
-                  {instance.name}
-                </option>
-              ))}
-            </select>
+              options={[{ value: "", label: "Select instance" }, ...instances.map((instance) => ({ value: instance.id, label: instance.name }))]}
+            />
             <Button
               variant="outline"
               disabled={!selectedInstance || checkProgress.active || updateProgress.active}
@@ -375,19 +370,14 @@ export function UpdatesPage() {
         }
         filters={
           <div className="flex flex-wrap items-center gap-2">
-            <select
-              className="h-9 rounded-md border border-[var(--color-input)] bg-[var(--color-muted)] px-3 text-sm"
+            <ThemedSelect
+              className="min-w-[10rem]"
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+              onValueChange={(value) => setStatusFilter(value as StatusFilter)}
               aria-label="Filter update status"
               disabled={checkProgress.active || updateProgress.active}
-            >
-              <option value="all">All statuses</option>
-              <option value="updateAvailable">Update available</option>
-              <option value="upToDate">Up to date</option>
-              <option value="unknown">Unknown</option>
-              <option value="error">Error</option>
-            </select>
+              options={[{ value: "all", label: "All statuses" }, { value: "updateAvailable", label: "Update available" }, { value: "upToDate", label: "Up to date" }, { value: "unknown", label: "Unknown" }, { value: "error", label: "Error" }]}
+            />
             <span className="text-sm text-[var(--color-muted-foreground)]">
               {filteredRows.length} of {rows.length} shown
             </span>

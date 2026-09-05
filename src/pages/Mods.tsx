@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   AlertTriangle,
@@ -15,12 +15,15 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { ThemedSelect } from "@/components/ui/themed-select";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PageShell } from "@/components/layout/PageShell";
 import { PageSearchBar } from "@/components/layout/PageSearchBar";
 import { PageToolbar } from "@/components/layout/PageToolbar";
 import { ModTable } from "@/components/mods/ModTable";
+import { ExportZipDialog, type ExportZipDialogOptions } from "@/components/instances/ExportZipDialog";
 import { ModEditDialog } from "@/components/mods/ModEditDialog";
+import { BulkModEditDialog } from "@/components/mods/BulkModEditDialog";
 import { ModFilters } from "@/components/mods/ModFilters";
 import { CategoryManager } from "@/components/mods/CategoryManager";
 import { useInstances } from "@/hooks/useInstances";
@@ -33,12 +36,18 @@ import {
   useScanMods,
   useToggleMod,
   useUpdateModMetadata,
+  useBulkUpdateModMetadata,
 } from "@/hooks/useMods";
 import { useCategories } from "@/hooks/useCategories";
 import { useAppStore, filterMods, type ModListFilters } from "@/store/app";
 import { api } from "@/lib/api";
 import { buildExportDefaultPath } from "@/lib/export-paths";
-import type { ModFile, ModIntegrityAudit, ModIntegrityReport } from "@/lib/types";
+import type {
+  ExportModsZipInput,
+  ModFile,
+  ModIntegrityAudit,
+  ModIntegrityReport,
+} from "@/lib/types";
 
 const defaultFilters: ModListFilters = {
   categoryId: null,
@@ -53,6 +62,7 @@ export function ModsPage() {
   const { data: instances = [] } = useInstances();
   const { selectedInstanceId, setSelectedInstance } = useAppStore();
   const instanceId = selectedInstanceId ?? instances[0]?.id ?? null;
+  const selectedInstance = instances.find((instance) => instance.id === instanceId) ?? null;
 
   const { data: mods = [], isLoading } = useMods(instanceId);
   const { data: categories = [] } = useCategories(instanceId);
@@ -62,12 +72,19 @@ export function ModsPage() {
   const toggleMutation = useToggleMod();
   const deleteMutation = useDeleteMod();
   const updateMetaMutation = useUpdateModMetadata();
+  const bulkUpdateMetaMutation = useBulkUpdateModMetadata();
   const resetMetaMutation = useResetModMetadata();
+  const exportZipMutation = useMutation({
+    mutationFn: (input: ExportModsZipInput) => api.instances.exportModsZip(input),
+  });
 
   const [modSearch, setModSearch] = useState("");
   const [filters, setFilters] = useState<ModListFilters>(defaultFilters);
   const [dragOver, setDragOver] = useState(false);
   const [editingMod, setEditingMod] = useState<ModFile | null>(null);
+  const [selectedModIds, setSelectedModIds] = useState<string[]>([]);
+  const [bulkEditOpen, setBulkEditOpen] = useState(false);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [pendingDeleteMod, setPendingDeleteMod] = useState<ModFile | null>(null);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [activeIntegrityAudit, setActiveIntegrityAudit] = useState<ModIntegrityAudit | null>(null);
@@ -77,6 +94,14 @@ export function ModsPage() {
     () => filterMods(mods, modSearch, filters),
     [mods, modSearch, filters]
   );
+  useEffect(() => {
+    const availableIds = new Set(mods.map((mod) => mod.id));
+    setSelectedModIds((current) => current.filter((id) => availableIds.has(id)));
+  }, [mods]);
+  useEffect(() => {
+    setSelectedModIds([]);
+    setBulkEditOpen(false);
+  }, [instanceId]);
   const exportableMods = useMemo(
     () => filteredMods.filter((mod) => mod.enabled),
     [filteredMods]
@@ -202,6 +227,36 @@ export function ModsPage() {
     await handleExportModList();
   };
 
+  const handleOpenExportModsZip = () => {
+    if (!selectedInstance) return;
+    setToolsOpen(false);
+    setExportDialogOpen(true);
+  };
+
+  const handleConfirmExportModsZip = async (
+    instance: NonNullable<typeof selectedInstance>,
+    options: ExportZipDialogOptions
+  ) => {
+    const settings = await api.settings.get();
+    const exportPath = await save({
+      defaultPath: buildExportDefaultPath(
+        settings.exportModpackDir,
+        `${instance.name}-mods.zip`
+      ),
+      filters: [{ name: "ZIP Archive", extensions: ["zip"] }],
+    });
+    if (!exportPath) return;
+
+    await exportZipMutation.mutateAsync({
+      instanceId: instance.id,
+      outputPath: exportPath,
+      modAudience: options.modAudience,
+      modCategoryId: options.modCategoryId,
+      modState: options.modState,
+    });
+    setExportDialogOpen(false);
+  };
+
   const confirmDeleteMod = (mod: ModFile) => {
     setPendingDeleteMod(mod);
   };
@@ -240,19 +295,13 @@ export function ModsPage() {
         description={description}
         controls={
           <>
-            <select
-              className="h-9 rounded-md border border-[var(--color-input)] bg-[var(--color-muted)] px-3 text-sm"
+            <ThemedSelect
+              className="min-w-[11rem]"
               value={instanceId ?? ""}
-              onChange={(e) => setSelectedInstance(e.target.value || null)}
+              onValueChange={(value) => setSelectedInstance(value || null)}
               aria-label="Select instance"
-            >
-              <option value="">Select instance</option>
-              {instances.map((i) => (
-                <option key={i.id} value={i.id}>
-                  {i.name}
-                </option>
-              ))}
-            </select>
+              options={[{ value: "", label: "Select instance" }, ...instances.map((instance) => ({ value: instance.id, label: instance.name }))]}
+            />
             <Button
               variant="outline"
               disabled={!instanceId}
@@ -298,6 +347,12 @@ export function ModsPage() {
                     disabled={!instanceId || exportableMods.length === 0}
                     onClick={handleMenuExportModList}
                   />
+                  <ToolMenuItem
+                    icon={FileDown}
+                    label="Export ZIP"
+                    disabled={!instanceId || mods.length === 0 || exportZipMutation.isPending}
+                    onClick={handleOpenExportModsZip}
+                  />
                 </div>
               )}
             </div>
@@ -338,6 +393,16 @@ export function ModsPage() {
         }
       />
 
+      {selectedModIds.length > 0 && (
+        <div className="flex items-center justify-between rounded-md border border-[var(--color-border)] bg-[var(--color-muted)] px-3 py-2 text-sm">
+          <span>{selectedModIds.length} mod{selectedModIds.length === 1 ? "" : "s"} selected</span>
+          <div className="flex gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setSelectedModIds([])}>Clear selection</Button>
+            <Button size="sm" onClick={() => setBulkEditOpen(true)}>Bulk edit</Button>
+          </div>
+        </div>
+      )}
+
       <div
         className={`rounded-lg border-2 border-dashed p-2 transition-colors ${
           dragOver
@@ -356,7 +421,7 @@ export function ModsPage() {
       >
         <div className="mb-2 flex items-center justify-center gap-2 py-3 text-sm text-[var(--color-muted-foreground)]">
           <Upload className="h-4 w-4" />
-          Drop .jar files here to add mods
+          Drop .jar files here
         </div>
         <ModTable
           mods={filteredMods}
@@ -369,6 +434,20 @@ export function ModsPage() {
             }
           }}
           onDelete={confirmDeleteMod}
+          selectedModIds={selectedModIds}
+          onSelectionChange={(modId, selected) => {
+            setSelectedModIds((current) =>
+              selected ? [...new Set([...current, modId])] : current.filter((id) => id !== modId)
+            );
+          }}
+          onSelectAll={(selected) => {
+            const visibleIds = filteredMods.map((mod) => mod.id);
+            setSelectedModIds((current) =>
+              selected
+                ? [...new Set([...current, ...visibleIds])]
+                : current.filter((id) => !visibleIds.includes(id))
+            );
+          }}
         />
       </div>
 
@@ -403,6 +482,35 @@ export function ModsPage() {
             onSuccess: (updated) => setEditingMod(updated),
           });
         }}
+      />
+      <BulkModEditDialog
+        instanceId={instanceId}
+        selectedCount={selectedModIds.length}
+        categories={categories}
+        open={bulkEditOpen}
+        saving={bulkUpdateMetaMutation.isPending}
+        onOpenChange={setBulkEditOpen}
+        onSave={(input) => {
+          bulkUpdateMetaMutation.mutate(
+            { ...input, modIds: selectedModIds },
+            {
+              onSuccess: () => {
+                setBulkEditOpen(false);
+                setSelectedModIds([]);
+              },
+            }
+          );
+        }}
+      />
+      <ExportZipDialog
+        instance={selectedInstance}
+        open={exportDialogOpen}
+        mode="mods"
+        mods={mods}
+        categories={categories}
+        exporting={exportZipMutation.isPending}
+        onOpenChange={setExportDialogOpen}
+        onConfirm={handleConfirmExportModsZip}
       />
     </div>
   );
@@ -465,7 +573,7 @@ function IntegrityAuditPanel({
                   ? "Checking mod archives..."
                   : statusClean
                     ? `Last audited ${formatAuditDate(audit?.auditedAt)} - checked ${audit?.totalMods ?? reports.length} mod${(audit?.totalMods ?? reports.length) === 1 ? "" : "s"} with no corrupted archives found.`
-                    : `Last audited ${formatAuditDate(audit?.auditedAt)} - ${audit?.corruptedMods ?? corrupted.length} of ${audit?.totalMods ?? reports.length} mod${(audit?.totalMods ?? reports.length) === 1 ? "" : "s"} need attention.`}
+                    : `Last audited ${formatAuditDate(audit?.auditedAt)} - ${audit?.corruptedMods ?? corrupted.length} of ${audit?.totalMods ?? reports.length} mod${(audit?.totalMods ?? reports.length) === 1 ? "" : "s"} failed.`}
               </p>
             </div>
           </div>

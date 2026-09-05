@@ -4,6 +4,8 @@ mod models;
 mod services;
 mod state;
 
+use tauri::Manager;
+
 use commands::categories::{create_category, delete_category, list_categories};
 use commands::files::{
     append_log, copy_file, delete_file, get_app_data_dir, hash_file_sha256, list_directory,
@@ -11,7 +13,7 @@ use commands::files::{
 };
 use commands::instances::{
     backup_instance, create_instance, delete_instance, duplicate_instance, export_instance_zip,
-    get_instance, import_instance_zip, list_instances, update_instance,
+    export_mods_zip, get_instance, import_instance_zip, list_instances, update_instance,
 };
 use commands::launcher::{
     detect_java_path, get_launch_config, get_launch_status, launch_instance, save_launch_config,
@@ -22,7 +24,7 @@ use commands::mods::{
     export_mod_list_html, get_latest_mod_integrity_audit, list_instance_relationship_graph,
     list_mod_relationships, list_mod_suggestions, list_mods, parse_mod_metadata,
     promote_mod_suggestion, reset_mod_metadata, scan_instance_mods, set_mod_enabled,
-    toggle_mod_enabled, update_mod_metadata, upsert_mod_suggestion,
+    toggle_mod_enabled, update_mod_metadata, bulk_update_mod_metadata, upsert_mod_suggestion,
 };
 use commands::packs::{
     list_pack_items, scan_pack_items, toggle_pack_item_enabled, update_pack_item_metadata,
@@ -31,8 +33,9 @@ use commands::scan::{get_default_minecraft_path, scan_default_minecraft, scan_mi
 use commands::settings::{get_settings, save_settings};
 use commands::updates::{
     append_update_log, check_update_target, check_updates, confirm_update_match,
-    get_latest_update_check, install_suggestion_from_modrinth, list_suggestion_modrinth_versions,
-    list_update_targets, save_update_check, update_mod_from_modrinth,
+    get_latest_update_check, get_modrinth_projects, install_suggestion_from_modrinth,
+    list_suggestion_modrinth_versions, list_update_targets, save_update_check,
+    update_mod_from_modrinth,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -43,6 +46,26 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             state::init_state(app.handle())?;
+            let launch_window_mode = state::with_state(|s| {
+                s.db.get_settings()
+                    .map(|settings| settings.launch_window_mode)
+                    .map_err(|e| e.to_string())
+            })?;
+            if let Some(window) = app.get_webview_window("main") {
+                match launch_window_mode.as_str() {
+                    "fullscreen" => {
+                        let _ = window.set_fullscreen(true);
+                    }
+                    "windowed" => {
+                        let _ = window.set_fullscreen(false);
+                        let _ = window.unmaximize();
+                    }
+                    _ => {
+                        let _ = window.set_fullscreen(false);
+                        let _ = window.maximize();
+                    }
+                }
+            }
             state::with_state(|s| {
                 s.db.append_log("info", "Modly started", None)
                     .map_err(|e| e.to_string())
@@ -60,6 +83,7 @@ pub fn run() {
             delete_instance,
             duplicate_instance,
             export_instance_zip,
+            export_mods_zip,
             import_instance_zip,
             backup_instance,
             list_categories,
@@ -76,6 +100,7 @@ pub fn run() {
             delete_mod,
             delete_mod_suggestion,
             update_mod_metadata,
+            bulk_update_mod_metadata,
             list_instance_relationship_graph,
             list_mod_relationships,
             upsert_mod_suggestion,
@@ -119,6 +144,7 @@ pub fn run() {
             check_update_target,
             confirm_update_match,
             update_mod_from_modrinth,
+            get_modrinth_projects,
             list_suggestion_modrinth_versions,
             install_suggestion_from_modrinth,
             append_update_log,

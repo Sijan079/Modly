@@ -6,6 +6,7 @@ import { PageShell } from "@/components/layout/PageShell";
 import { PageToolbar } from "@/components/layout/PageToolbar";
 import { PackEditDialog } from "@/components/mods/PackEditDialog";
 import { Button } from "@/components/ui/button";
+import { ThemedSelect } from "@/components/ui/themed-select";
 import { PlatformLinkButton } from "@/components/ui/platform-link-button";
 import { useInstances } from "@/hooks/useInstances";
 import {
@@ -113,22 +114,16 @@ export function ResourcePacksPage() {
     <div className="flex flex-col gap-5">
       <PageShell
         title="DSR Packs"
-        description="Browse, toggle, and organize data, shader, and resource pack content per instance"
+        description="Resource, shader, and datapacks"
         controls={
           <>
-            <select
-              className="h-9 rounded-md border border-[var(--color-input)] bg-[var(--color-muted)] px-3 text-sm"
+            <ThemedSelect
+              className="min-w-[11rem]"
               value={instanceId ?? ""}
-              onChange={(e) => setSelectedInstance(e.target.value || null)}
+              onValueChange={(value) => setSelectedInstance(value || null)}
               aria-label="Select instance"
-            >
-              <option value="">Select instance</option>
-              {instances.map((instance) => (
-                <option key={instance.id} value={instance.id}>
-                  {instance.name}
-                </option>
-              ))}
-            </select>
+              options={[{ value: "", label: "Select instance" }, ...instances.map((instance) => ({ value: instance.id, label: instance.name }))]}
+            />
             <Button
               variant="outline"
               onClick={() => refetch()}
@@ -314,9 +309,6 @@ function PackTable({
     return (
       <div className="flex h-48 flex-col items-center justify-center gap-2 text-[var(--color-muted-foreground)]">
         <p>{emptyMessage}</p>
-        <p className="text-xs">
-          Toggle between pack types or refresh after scanning the instance folders.
-        </p>
       </div>
     );
   }

@@ -8,7 +8,18 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import type { ExportInstanceZipInput, Instance } from "@/lib/types";
+import { ThemedSelect } from "@/components/ui/themed-select";
+import {
+  DEFAULT_EXPORT_MOD_FILTERS,
+  countMatchingMods,
+} from "@/lib/export-filters";
+import type {
+  ExportInstanceZipInput,
+  ExportModsZipInput,
+  Instance,
+  InstanceCategory,
+  ModFile,
+} from "@/lib/types";
 
 const DEFAULT_OPTIONS = {
   includeMods: true,
@@ -17,28 +28,47 @@ const DEFAULT_OPTIONS = {
   includeShaderPacks: true,
   includeDatapacks: true,
   includeManifest: true,
+  ...DEFAULT_EXPORT_MOD_FILTERS,
 } satisfies Omit<ExportInstanceZipInput, "instanceId" | "outputPath">;
+
+type ToggleableExportOptionKey =
+  | "includeMods"
+  | "includeConfigs"
+  | "includeResourcePacks"
+  | "includeShaderPacks"
+  | "includeDatapacks"
+  | "includeManifest";
+
+export type ExportZipDialogOptions = Omit<
+  ExportInstanceZipInput,
+  "instanceId" | "outputPath"
+>;
 
 interface ExportZipDialogProps {
   instance: Instance | null;
   open: boolean;
+  mode?: "instance" | "mods";
+  mods: ModFile[];
+  categories: InstanceCategory[];
   exporting?: boolean;
   onOpenChange: (open: boolean) => void;
   onConfirm: (
     instance: Instance,
-    options: Omit<ExportInstanceZipInput, "instanceId" | "outputPath">
+    options: ExportZipDialogOptions
   ) => Promise<void>;
 }
 
 export function ExportZipDialog({
   instance,
   open,
+  mode = "instance",
+  mods,
+  categories,
   exporting = false,
   onOpenChange,
   onConfirm,
 }: ExportZipDialogProps) {
-  const [options, setOptions] =
-    useState<Omit<ExportInstanceZipInput, "instanceId" | "outputPath">>(DEFAULT_OPTIONS);
+  const [options, setOptions] = useState<ExportZipDialogOptions>(DEFAULT_OPTIONS);
 
   useEffect(() => {
     if (open) {
@@ -46,14 +76,22 @@ export function ExportZipDialog({
     }
   }, [open]);
 
+  const isModsOnly = mode === "mods";
   const nothingSelected =
     !options.includeMods &&
     !options.includeConfigs &&
     !options.includeResourcePacks &&
     !options.includeShaderPacks &&
     !options.includeDatapacks;
+  const matchingModCount = countMatchingMods(mods, options);
+  const modsRequired = isModsOnly || options.includeMods;
+  const disableConfirm =
+    !instance ||
+    exporting ||
+    (!isModsOnly && nothingSelected) ||
+    (modsRequired && matchingModCount === 0);
 
-  const toggle = (key: keyof typeof DEFAULT_OPTIONS) => {
+  const toggle = (key: ToggleableExportOptionKey) => {
     setOptions((current) => ({ ...current, [key]: !current[key] }));
   };
 
@@ -67,53 +105,120 @@ export function ExportZipDialog({
     >
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Export ZIP</DialogTitle>
+          <DialogTitle>{isModsOnly ? "Export Mods ZIP" : "Export ZIP"}</DialogTitle>
           <DialogDescription>
-            Choose what to package for {instance?.name ?? "this instance"}.
+            {isModsOnly
+              ? `Choose which mods to package for ${instance?.name ?? "this instance"}.`
+              : `Choose what to package for ${instance?.name ?? "this instance"}.`}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3">
-          <ExportOptionCard
-            title="Mods"
-            description="Export enabled mods from the instance mods folder."
-            checked={options.includeMods}
-            onToggle={() => toggle("includeMods")}
-          />
-          <ExportOptionCard
-            title="Configs"
-            description="Include the resolved config folder, including custom overrides."
-            checked={options.includeConfigs}
-            onToggle={() => toggle("includeConfigs")}
-          />
-          <ExportOptionCard
-            title="Resource Packs"
-            description="Include resolved resource pack content under resourcepacks/."
-            checked={options.includeResourcePacks}
-            onToggle={() => toggle("includeResourcePacks")}
-          />
-          <ExportOptionCard
-            title="Shader Packs"
-            description="Include resolved shader pack content under shaderpacks/."
-            checked={options.includeShaderPacks}
-            onToggle={() => toggle("includeShaderPacks")}
-          />
-          <ExportOptionCard
-            title="Datapacks"
-            description="Include resolved datapack content under datapacks/."
-            checked={options.includeDatapacks}
-            onToggle={() => toggle("includeDatapacks")}
-          />
-          <ExportOptionCard
-            title="Include Modly manifest"
-            description="Write modly-instance.json so another Modly app can reconstruct the instance."
-            checked={options.includeManifest}
-            onToggle={() => toggle("includeManifest")}
-          />
+          {!isModsOnly && (
+            <>
+              <ExportOptionCard
+                title="Mods"
+                description="Export matching mods from the instance mods folder."
+                checked={options.includeMods}
+                onToggle={() => toggle("includeMods")}
+              />
+              <ExportOptionCard
+                title="Configs"
+                description="Include the resolved config folder, including custom overrides."
+                checked={options.includeConfigs}
+                onToggle={() => toggle("includeConfigs")}
+              />
+              <ExportOptionCard
+                title="Resource Packs"
+                description="Include resolved resource pack content under resourcepacks/."
+                checked={options.includeResourcePacks}
+                onToggle={() => toggle("includeResourcePacks")}
+              />
+              <ExportOptionCard
+                title="Shader Packs"
+                description="Include resolved shader pack content under shaderpacks/."
+                checked={options.includeShaderPacks}
+                onToggle={() => toggle("includeShaderPacks")}
+              />
+              <ExportOptionCard
+                title="Datapacks"
+                description="Include resolved datapack content under datapacks/."
+                checked={options.includeDatapacks}
+                onToggle={() => toggle("includeDatapacks")}
+              />
+              <ExportOptionCard
+                title="Include Modly manifest"
+                description="Write modly-instance.json so another Modly app can reconstruct the instance."
+                checked={options.includeManifest}
+                onToggle={() => toggle("includeManifest")}
+              />
+            </>
+          )}
+          <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-muted)]/25 p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-[var(--color-foreground)]">Mod filters</p>
+                <p className="mt-1 text-xs text-[var(--color-muted-foreground)]">
+                  {isModsOnly
+                    ? "This ZIP includes only matching files under mods/."
+                    : "These filters only change which files are written into mods/."}
+                </p>
+              </div>
+              <div className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-muted-foreground)]">
+                {matchingModCount} mod{matchingModCount === 1 ? "" : "s"} match
+              </div>
+            </div>
+            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              <label className="space-y-1 text-sm">
+                <span className="block text-xs text-[var(--color-muted-foreground)]">Audience</span>
+                <ThemedSelect
+                  className="w-full bg-[var(--color-card)]"
+                  value={options.modAudience}
+                  onValueChange={(value) =>
+                    setOptions((current) => ({
+                      ...current,
+                      modAudience: value as ExportModsZipInput["modAudience"],
+                    }))
+                  }
+                  options={[{ value: "any", label: "Any" }, { value: "player", label: "Player" }, { value: "server", label: "Server" }]}
+                />
+              </label>
+              <label className="space-y-1 text-sm">
+                <span className="block text-xs text-[var(--color-muted-foreground)]">Category</span>
+                <ThemedSelect
+                  className="w-full bg-[var(--color-card)]"
+                  value={options.modCategoryId ?? ""}
+                  onValueChange={(value) =>
+                    setOptions((current) => ({
+                      ...current,
+                      modCategoryId: value || null,
+                    }))
+                  }
+                  options={[{ value: "", label: "All categories" }, ...categories.map((category) => ({ value: category.id, label: category.name }))]}
+                />
+              </label>
+              <label className="space-y-1 text-sm">
+                <span className="block text-xs text-[var(--color-muted-foreground)]">State</span>
+                <ThemedSelect
+                  className="w-full bg-[var(--color-card)]"
+                  value={options.modState}
+                  onValueChange={(value) =>
+                    setOptions((current) => ({
+                      ...current,
+                      modState: value as ExportModsZipInput["modState"],
+                    }))
+                  }
+                  options={[{ value: "enabled", label: "Enabled only" }, { value: "disabled", label: "Disabled only" }, { value: "both", label: "Enabled and disabled" }]}
+                />
+              </label>
+            </div>
+          </div>
         </div>
 
         <p className="text-xs text-[var(--color-muted-foreground)]">
-          The ZIP keeps standard folder names and uses the instance's resolved override paths.
+          {isModsOnly
+            ? "The ZIP keeps standard folder names and only writes matching files into mods/."
+            : "The ZIP keeps standard folder names and uses the instance's resolved override paths."}
         </p>
 
         {exporting && (
@@ -129,7 +234,7 @@ export function ExportZipDialog({
           </Button>
           <Button
             onClick={() => instance && onConfirm(instance, options)}
-            disabled={!instance || exporting || nothingSelected}
+            disabled={disableConfirm}
           >
             {exporting ? (
               <>

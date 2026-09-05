@@ -7,8 +7,8 @@ use uuid::Uuid;
 use crate::models::mod_metadata::{ModFile, UpdateModMetadataInput};
 use crate::models::updates::{
     CheckUpdateTargetInput, ConfirmUpdateMatchInput, InstallSuggestionFromModrinthInput,
-    SavedUpdateCheck, SuggestionVersionOption, UpdateItemType, UpdateModFromModrinthInput,
-    UpdateRow, UpdateTarget,
+    ModrinthProjectSummary, SavedUpdateCheck, SuggestionVersionOption, UpdateItemType,
+    UpdateModFromModrinthInput, UpdateRow, UpdateTarget,
 };
 use crate::services::hash_service::hash_file;
 use crate::services::mod_parser::parse_mod_jar;
@@ -331,6 +331,22 @@ pub async fn list_suggestion_modrinth_versions(
     }
 
     Ok(versions)
+}
+
+#[command]
+pub async fn get_modrinth_projects(project_ids: Vec<String>) -> Result<Vec<ModrinthProjectSummary>, String> {
+    let mut ids = project_ids
+        .into_iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids.dedup();
+
+    UpdateService::default()
+        .get_projects(&ids)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[command]

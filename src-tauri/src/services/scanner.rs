@@ -71,6 +71,44 @@ pub fn scan_minecraft_directory(root: &Path) -> Result<MinecraftScanResult> {
     })
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstanceMetadataGuess {
+    pub name: String,
+    pub loader: LoaderType,
+    pub mc_version: Option<String>,
+}
+
+/// Infers sensible initial instance metadata from an existing game directory.
+pub fn infer_instance_metadata(root: &Path) -> InstanceMetadataGuess {
+    let name = root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("Minecraft Instance")
+        .to_string();
+    let loaders = detect_loaders(root);
+    let loader = loaders
+        .first()
+        .map(|detected| detected.loader)
+        .unwrap_or(LoaderType::Unknown);
+    let mc_version = loaders
+        .iter()
+        .find_map(|detected| {
+            detected
+                .version
+                .as_deref()
+                .and_then(extract_minecraft_version)
+                .or_else(|| extract_minecraft_version(&detected.path))
+        })
+        .or_else(|| find_minecraft_version_in_versions_dir(root));
+
+    InstanceMetadataGuess {
+        name,
+        loader,
+        mc_version,
+    }
+}
+
 pub fn scan_mods_directory(mods_dir: &Path) -> Result<Vec<PathBuf>> {
     if !mods_dir.exists() {
         return Ok(vec![]);
@@ -136,6 +174,22 @@ fn detect_loaders(root: &Path) -> Vec<DetectedLoader> {
                 });
                 break;
             }
+            if name.contains("neoforge") {
+                loaders.push(DetectedLoader {
+                    loader: LoaderType::NeoForge,
+                    version: extract_minecraft_version(&name),
+                    path: entry.path().to_string_lossy().to_string(),
+                });
+                break;
+            }
+            if name.contains("forge") {
+                loaders.push(DetectedLoader {
+                    loader: LoaderType::Forge,
+                    version: extract_minecraft_version(&name),
+                    path: entry.path().to_string_lossy().to_string(),
+                });
+                break;
+            }
         }
     }
 
@@ -189,6 +243,35 @@ fn detect_loaders(root: &Path) -> Vec<DetectedLoader> {
     loaders
 }
 
+fn find_minecraft_version_in_versions_dir(root: &Path) -> Option<String> {
+    let entries = std::fs::read_dir(root.join("versions")).ok()?;
+    entries.flatten().find_map(|entry| extract_minecraft_version(&entry.file_name().to_string_lossy()))
+}
+
+fn extract_minecraft_version(value: &str) -> Option<String> {
+    let chars = value.chars().collect::<Vec<_>>();
+    for start in 0..chars.len() {
+        if chars.get(start) != Some(&'1') || chars.get(start + 1) != Some(&'.') {
+            continue;
+        }
+        let end = chars[start..]
+            .iter()
+            .take_while(|character| character.is_ascii_digit() || **character == '.')
+            .count()
+            + start;
+        let candidate = chars[start..end].iter().collect::<String>();
+        let parts = candidate.split('.').collect::<Vec<_>>();
+        if (2..=3).contains(&parts.len())
+            && parts
+                .iter()
+                .all(|part| !part.is_empty() && part.chars().all(|character| character.is_ascii_digit()))
+        {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 fn extract_version_from_filename(name: &str) -> Option<String> {
     name.split('-')
         .last()
@@ -197,7 +280,8 @@ fn extract_version_from_filename(name: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::scan_minecraft_directory;
+    use super::{infer_instance_metadata, scan_minecraft_directory};
+    use crate::models::instance::LoaderType;
     use std::fs;
     use uuid::Uuid;
 
@@ -214,6 +298,22 @@ mod tests {
             .detected_paths
             .iter()
             .any(|path| matches!(path.kind, crate::models::scan::PathKind::Datapacks)));
+
+        fs::remove_dir_all(root).expect("temp dir should be removed");
+    }
+
+    #[test]
+    fn infers_metadata_from_mod_filename_and_folder_name() {
+        let root = std::env::temp_dir().join(format!("My NeoForge Pack-{}", Uuid::new_v4()));
+        fs::create_dir_all(root.join("mods")).expect("mods directory should exist");
+        fs::write(root.join("mods").join("example-neoforge-1.21.1-1.0.0.jar"), b"jar")
+            .expect("mod file should exist");
+
+        let guess = infer_instance_metadata(&root);
+
+        assert_eq!(guess.name, root.file_name().unwrap().to_string_lossy());
+        assert_eq!(guess.loader, LoaderType::NeoForge);
+        assert_eq!(guess.mc_version.as_deref(), Some("1.21.1"));
 
         fs::remove_dir_all(root).expect("temp dir should be removed");
     }

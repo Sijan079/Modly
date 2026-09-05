@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Plus, Tag, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ThemedSelect } from "@/components/ui/themed-select";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -198,19 +199,13 @@ export function CategoryManager({
                   <p className="text-xs text-[var(--color-muted-foreground)]">
                     Move every affected mod to one replacement category before deleting this one.
                   </p>
-                  <select
-                    className="flex h-9 w-full rounded-md border border-[var(--color-input)] bg-[var(--color-muted)] px-3 text-sm"
+                  <ThemedSelect
+                    className="w-full"
                     value={replacementCategoryId}
-                    onChange={(event) => setReplacementCategoryId(event.target.value)}
+                    onValueChange={setReplacementCategoryId}
                     disabled={deleteMode !== "recategorize"}
-                  >
-                    <option value="">Select replacement category</option>
-                    {replacementOptions.map((category) => (
-                      <option key={category.id} value={category.id}>
-                        {category.name}
-                      </option>
-                    ))}
-                  </select>
+                    options={[{ value: "", label: "Select replacement category" }, ...replacementOptions.map((category) => ({ value: category.id, label: category.name }))]}
+                  />
                 </div>
               </label>
             ) : (

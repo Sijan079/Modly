@@ -1,11 +1,14 @@
 use tauri::command;
 
 use crate::models::instance::{
-    CreateInstanceInput, ExportInstanceZipInput, Instance, LoaderType, UpdateInstanceInput,
+    CreateInstanceInput, ExportInstanceZipInput, ExportModsZipInput, Instance, LoaderType,
+    UpdateInstanceInput,
 };
 use crate::models::pack_item::PackType;
+use crate::services::scanner::infer_instance_metadata;
 use crate::services::zip_service::{
-    create_instance_export_zip, import_modpack_zip, read_imported_instance_metadata,
+    create_instance_export_zip, create_mods_only_export_zip, filter_mods_for_export,
+    import_modpack_zip, read_imported_instance_metadata, ModExportFilter,
 };
 use crate::state::with_state;
 
@@ -27,26 +30,75 @@ pub async fn create_instance(input: CreateInstanceInput) -> Result<Instance, Str
             std::fs::create_dir_all(std::path::Path::new(&input.game_dir).join(folder))
                 .map_err(|e| e.to_string())?;
         }
-        state.db.create_instance(input).map_err(|e| e.to_string())
+        let fallback_name = std::path::Path::new(&input.game_dir)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or("Minecraft Instance")
+            .to_string();
+        let created = state
+            .db
+            .create_instance(CreateInstanceInput {
+                name: if input.name.trim().is_empty() { fallback_name } else { input.name },
+                game_dir: input.game_dir.clone(),
+                loader: input.loader,
+                mc_version: input.mc_version,
+            })
+            .map_err(|e| e.to_string())?;
+        let guess = infer_instance_metadata(std::path::Path::new(&input.game_dir));
+
+        let saved = state
+            .db
+            .update_instance(UpdateInstanceInput {
+                id: created.id,
+                name: Some(guess.name),
+                game_dir: None,
+                loader: Some(guess.loader),
+                mc_version: guess.mc_version,
+                resource_packs_path: None,
+                shader_packs_path: None,
+                data_packs_path: None,
+                config_path: None,
+            })
+            .map_err(|e| e.to_string())?;
+        state
+            .db
+            .append_log("info", &format!("Created instance: {}", saved.name), Some(&saved.name))
+            .map_err(|e| e.to_string())?;
+        Ok(saved)
     })
 }
 
 #[command]
 pub async fn update_instance(input: UpdateInstanceInput) -> Result<Instance, String> {
-    with_state(|state| state.db.update_instance(input).map_err(|e| e.to_string()))
+    with_state(|state| {
+        let instance = state.db.update_instance(input).map_err(|e| e.to_string())?;
+        state
+            .db
+            .append_log("info", &format!("Updated instance: {}", instance.name), Some(&instance.name))
+            .map_err(|e| e.to_string())?;
+        Ok(instance)
+    })
 }
 
 #[command]
 pub async fn delete_instance(id: String, delete_files: bool) -> Result<(), String> {
     with_state(|state| {
+        let instance = state
+            .db
+            .get_instance(&id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Instance not found".to_string())?;
         if delete_files {
-            if let Some(instance) = state.db.get_instance(&id).map_err(|e| e.to_string())? {
-                if std::path::Path::new(&instance.game_dir).exists() {
-                    std::fs::remove_dir_all(&instance.game_dir).map_err(|e| e.to_string())?;
-                }
+            if std::path::Path::new(&instance.game_dir).exists() {
+                std::fs::remove_dir_all(&instance.game_dir).map_err(|e| e.to_string())?;
             }
         }
-        state.db.delete_instance(&id).map_err(|e| e.to_string())
+        state.db.delete_instance(&id).map_err(|e| e.to_string())?;
+        state
+            .db
+            .append_log("info", &format!("Deleted instance{}: {}", if delete_files { " and files" } else { "" }, instance.name), None)
+            .map_err(|e| e.to_string())
     })
 }
 
@@ -57,10 +109,15 @@ pub async fn duplicate_instance(
     new_game_dir: String,
 ) -> Result<Instance, String> {
     with_state(|state| {
-        state
+        let instance = state
             .db
             .duplicate_instance(&id, &new_name, &new_game_dir)
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        state
+            .db
+            .append_log("info", &format!("Duplicated instance: {}", instance.name), Some(&instance.name))
+            .map_err(|e| e.to_string())?;
+        Ok(instance)
     })
 }
 
@@ -72,14 +129,21 @@ pub async fn export_instance_zip(input: ExportInstanceZipInput) -> Result<(), St
             .get_instance(&input.instance_id)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "Instance not found".to_string())?;
-        let enabled_mod_paths = state
+        let mods = state
             .db
             .list_mods(&input.instance_id)
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .filter(|mod_file| mod_file.enabled)
-            .map(|mod_file| std::path::PathBuf::from(mod_file.file_path))
-            .collect::<Vec<_>>();
+            .map_err(|e| e.to_string())?;
+        let filtered_mod_paths = filter_mods_for_export(
+            &mods,
+            &ModExportFilter {
+                mod_audience: input.mod_audience,
+                mod_category_id: input.mod_category_id.clone(),
+                mod_state: input.mod_state,
+            },
+        )
+        .into_iter()
+        .map(|mod_file| std::path::PathBuf::from(&mod_file.file_path))
+        .collect::<Vec<_>>();
 
         let export_options = crate::services::zip_service::InstanceExportOptions {
             include_mods: input.include_mods,
@@ -126,11 +190,52 @@ pub async fn export_instance_zip(input: ExportInstanceZipInput) -> Result<(), St
         create_instance_export_zip(
             &instance,
             std::path::Path::new(&input.output_path),
-            &enabled_mod_paths,
+            &filtered_mod_paths,
             &export_options,
             &manifest,
         )
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+        state
+            .db
+            .append_log("info", &format!("Exported instance ZIP: {}", instance.name), Some(&instance.name))
+            .map_err(|e| e.to_string())
+    })
+}
+
+#[command]
+pub async fn export_mods_zip(input: ExportModsZipInput) -> Result<(), String> {
+    with_state(|state| {
+        let instance = state
+            .db
+            .get_instance(&input.instance_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Instance not found".to_string())?;
+        let mods = state
+            .db
+            .list_mods(&input.instance_id)
+            .map_err(|e| e.to_string())?;
+        let filtered_mod_paths = filter_mods_for_export(
+            &mods,
+            &ModExportFilter {
+                mod_audience: input.mod_audience,
+                mod_category_id: input.mod_category_id.clone(),
+                mod_state: input.mod_state,
+            },
+        )
+        .into_iter()
+        .map(|mod_file| std::path::PathBuf::from(&mod_file.file_path))
+        .collect::<Vec<_>>();
+
+        create_mods_only_export_zip(
+            std::path::Path::new(&input.output_path),
+            &std::path::Path::new(&instance.game_dir).join("mods"),
+            &filtered_mod_paths,
+        )
+        .map_err(|e| e.to_string())?;
+        state
+            .db
+            .append_log("info", &format!("Exported mods ZIP: {}", instance.name), Some(&instance.name))
+            .map_err(|e| e.to_string())
     })
 }
 
@@ -205,6 +310,9 @@ pub async fn backup_instance(instance_id: String, output_path: String) -> Result
         include_shader_packs: true,
         include_datapacks: true,
         include_manifest: true,
+        mod_audience: crate::models::instance::ExportModAudience::Any,
+        mod_category_id: None,
+        mod_state: crate::models::instance::ExportModState::Enabled,
     })
     .await
 }

@@ -116,6 +116,21 @@ pub struct SuggestionVersionOption {
     pub release_date: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModrinthProjectSummary {
+    pub project_id: String,
+    pub title: String,
+    pub description: String,
+    pub body: Option<String>,
+    pub icon_url: Option<String>,
+    pub downloads: Option<u64>,
+    pub followers: Option<u64>,
+    pub categories: Vec<String>,
+    pub game_versions: Vec<String>,
+    pub loaders: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallSuggestionFromModrinthInput {

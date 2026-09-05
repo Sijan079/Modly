@@ -5,6 +5,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ThemedSelect } from "@/components/ui/themed-select";
 import { Card, CardContent } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
@@ -25,6 +26,7 @@ import { useInstances } from "@/hooks/useInstances";
 import {
   useDeleteModSuggestion,
   useInstallSuggestion,
+  useModrinthProjects,
   useMods,
   useModSuggestions,
   usePromoteModSuggestion,
@@ -36,26 +38,17 @@ import type {
   InstanceCategory,
   ModFile,
   ModLoaderKind,
+  ModSide,
+  ModrinthProjectSummary,
   ModSuggestion,
   SuggestionVersionOption,
 } from "@/lib/types";
 import { formatDate, formatLoader } from "@/lib/utils";
 import { normalizeSourceUrl, parseModSourceUrl } from "@/lib/mod-source-url";
 
-interface ModrinthProject {
-  title: string;
-  description: string;
-  body?: string;
-  icon_url?: string | null;
-  downloads?: number;
-  followers?: number;
-  categories?: string[];
-  game_versions?: string[];
-  loaders?: string[];
-}
-
 const LOADERS: ModLoaderKind[] = ["fabric", "forge", "neoforge", "quilt", "unknown"];
 const VERSION_LOADERS: Array<ModLoaderKind | ""> = ["", "fabric", "forge", "neoforge", "quilt"];
+const SIDES: ModSide[] = ["unknown", "client", "server", "both"];
 
 const defaultFilters: ModListFilters = {
   categoryId: null,
@@ -68,7 +61,9 @@ const defaultFilters: ModListFilters = {
 const emptyDraft = {
   id: null as string | null,
   name: "",
+  version: "",
   loader: "unknown" as ModLoaderKind,
+  side: "unknown" as ModSide,
   sourceUrl: "",
   filePath: "",
   enabled: true,
@@ -79,6 +74,33 @@ type ToastState = {
   id: number;
   message: string;
 } | null;
+
+type InstallState = {
+  open: boolean;
+  target: ModSuggestion | null;
+  loader: ModLoaderKind | "";
+  gameVersion: string;
+  versionOptions: SuggestionVersionOption[];
+  selectedVersionId: string;
+  error: string | null;
+};
+
+function createInstallState(
+  selectedInstance: { mcVersion?: string | null; loader?: string | null } | null
+): InstallState {
+  return {
+    open: false,
+    target: null,
+    loader:
+      selectedInstance?.loader && selectedInstance.loader !== "vanilla"
+        ? (selectedInstance.loader as ModLoaderKind | "")
+        : "",
+    gameVersion: selectedInstance?.mcVersion ?? "",
+    versionOptions: [],
+    selectedVersionId: "",
+    error: null,
+  };
+}
 
 export function ModSuggestionsPage() {
   const { data: instances = [] } = useInstances();
@@ -101,18 +123,23 @@ export function ModSuggestionsPage() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [pendingDeleteSuggestion, setPendingDeleteSuggestion] =
     useState<ModSuggestion | null>(null);
-  const [installDialogOpen, setInstallDialogOpen] = useState(false);
-  const [installTarget, setInstallTarget] = useState<ModSuggestion | null>(null);
-  const [installLoader, setInstallLoader] = useState<ModLoaderKind | "">("");
-  const [installGameVersion, setInstallGameVersion] = useState("");
-  const [versionOptions, setVersionOptions] = useState<SuggestionVersionOption[]>([]);
-  const [selectedVersionId, setSelectedVersionId] = useState("");
-  const [installError, setInstallError] = useState<string | null>(null);
+  const [installState, setInstallState] = useState<InstallState>(() =>
+    createInstallState(selectedInstance)
+  );
   const [toast, setToast] = useState<ToastState>(null);
 
   const selectedSuggestion =
     suggestions.find((suggestion) => suggestion.id === selectedId) ?? null;
   const preview = parseModSourceUrl(selectedSuggestion?.sourceUrl);
+  const previewProjectId = preview?.platform === "modrinth" ? preview.project : null;
+  const {
+    data: previewProjects = [],
+    isLoading: previewProjectLoading,
+    error: previewProjectError,
+  } = useModrinthProjects(
+    previewProjectId ? [previewProjectId] : []
+  );
+  const previewProject = previewProjects[0] ?? null;
   const filteredSuggestions = useMemo(
     () => filterMods(suggestions, search, filters),
     [filters, search, suggestions]
@@ -138,6 +165,27 @@ export function ModSuggestionsPage() {
     setToast({ id: Date.now(), message });
   };
 
+  const resetInstallState = () => {
+    setInstallState(createInstallState(selectedInstance));
+  };
+
+  const openInstallState = (
+    target: ModSuggestion,
+    loader: ModLoaderKind | "",
+    gameVersion: string,
+    error: string | null = null
+  ) => {
+    setInstallState({
+      open: true,
+      target,
+      loader,
+      gameVersion,
+      versionOptions: [],
+      selectedVersionId: "",
+      error,
+    });
+  };
+
   const openInstallDialog = async (suggestion: ModSuggestion) => {
     const source = parseModSourceUrl(suggestion.sourceUrl);
     if (source?.platform !== "modrinth") {
@@ -151,17 +199,14 @@ export function ModSuggestionsPage() {
         );
         return;
       }
-      setInstallTarget(suggestion);
-      setInstallLoader("");
-      setInstallGameVersion(selectedInstance?.mcVersion ?? "");
-      setVersionOptions([]);
-      setSelectedVersionId("");
-      setInstallError(
+      openInstallState(
+        suggestion,
+        "",
+        selectedInstance?.mcVersion ?? "",
         source?.platform === "curseforge"
           ? "This suggestion points to CurseForge. Download from the source page first, attach the jar, then add it."
           : "Add a Modrinth source URL or attach a local jar before installing this suggestion."
       );
-      setInstallDialogOpen(true);
       return;
     }
 
@@ -173,13 +218,7 @@ export function ModSuggestionsPage() {
           : ((selectedInstance?.loader ?? "") as ModLoaderKind | "");
     const nextGameVersion = selectedInstance?.mcVersion ?? "";
 
-    setInstallTarget(suggestion);
-    setInstallLoader(nextLoader);
-    setInstallGameVersion(nextGameVersion);
-    setInstallDialogOpen(true);
-    setInstallError(null);
-    setVersionOptions([]);
-    setSelectedVersionId("");
+    openInstallState(suggestion, nextLoader, nextGameVersion);
 
     try {
       const versions = await suggestionVersions.mutateAsync({
@@ -187,58 +226,77 @@ export function ModSuggestionsPage() {
         gameVersion: nextGameVersion || null,
         loader: nextLoader || null,
       });
-      setVersionOptions(versions);
-      setSelectedVersionId(versions[0]?.versionId ?? "");
+      setInstallState((current) => ({
+        ...current,
+        versionOptions: versions,
+        selectedVersionId: versions[0]?.versionId ?? "",
+      }));
     } catch (error) {
-      setInstallError(error instanceof Error ? error.message : String(error));
+      setInstallState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : String(error),
+      }));
     }
   };
 
   const reloadInstallVersions = async () => {
-    if (!installTarget) return;
-    setInstallError(null);
-    setVersionOptions([]);
-    setSelectedVersionId("");
+    if (!installState.target) return;
+    setInstallState((current) => ({
+      ...current,
+      error: null,
+      versionOptions: [],
+      selectedVersionId: "",
+    }));
 
     try {
       const versions = await suggestionVersions.mutateAsync({
-        suggestionId: installTarget.id,
-        gameVersion: installGameVersion.trim() || null,
-        loader: installLoader || null,
+        suggestionId: installState.target.id,
+        gameVersion: installState.gameVersion.trim() || null,
+        loader: installState.loader || null,
       });
-      setVersionOptions(versions);
-      setSelectedVersionId(versions[0]?.versionId ?? "");
+      setInstallState((current) => ({
+        ...current,
+        versionOptions: versions,
+        selectedVersionId: versions[0]?.versionId ?? "",
+      }));
     } catch (error) {
-      setInstallError(error instanceof Error ? error.message : String(error));
+      setInstallState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : String(error),
+      }));
     }
   };
 
   const confirmInstallSuggestion = async () => {
-    if (!installTarget || !instanceId) return;
-    const chosen = versionOptions.find((option) => option.versionId === selectedVersionId);
+    if (!installState.target || !instanceId) return;
+    const chosen = installState.versionOptions.find(
+      (option) => option.versionId === installState.selectedVersionId
+    );
 
     if (chosen) {
       await installSuggestion.mutateAsync({
-        suggestionId: installTarget.id,
+        suggestionId: installState.target.id,
         versionId: chosen.versionId,
         downloadUrl: chosen.downloadUrl,
         fileName: chosen.fileName,
         expectedSha256: chosen.expectedSha256,
       });
       showToast("Suggestion installed.");
-    } else if (installTarget.filePath) {
-      await promoteSuggestion.mutateAsync({ instanceId, suggestionId: installTarget.id });
+    } else if (installState.target.filePath) {
+      await promoteSuggestion.mutateAsync({
+        instanceId,
+        suggestionId: installState.target.id,
+      });
       showToast("Suggestion installed.");
     } else {
-      setInstallError("Pick a compatible version or attach a local jar first.");
+      setInstallState((current) => ({
+        ...current,
+        error: "Pick a compatible version or attach a local jar first.",
+      }));
       return;
     }
 
-    setInstallDialogOpen(false);
-    setInstallTarget(null);
-    setInstallError(null);
-    setVersionOptions([]);
-    setSelectedVersionId("");
+    resetInstallState();
   };
 
   const editSuggestion = (suggestion: ModSuggestion) => {
@@ -246,7 +304,9 @@ export function ModSuggestionsPage() {
     setDraft({
       id: suggestion.id,
       name: suggestion.metadata?.name ?? suggestion.fileName,
+      version: suggestion.metadata?.version === "?" ? "" : suggestion.metadata?.version ?? "",
       loader: suggestion.metadata?.loader ?? "unknown",
+      side: suggestion.metadata?.side ?? "unknown",
       sourceUrl: suggestion.sourceUrl ?? "",
       filePath: suggestion.filePath ?? "",
       enabled: suggestion.enabled,
@@ -296,9 +356,10 @@ export function ModSuggestionsPage() {
         hashSha256: null,
         sourceUrl: normalizedUrl || null,
         name,
-        version: "?",
+        version: draft.version.trim() || "?",
         authors: [],
         loader: draft.loader,
+        side: draft.side,
         modIdField: null,
         categoryIds: draft.categoryIds,
       },
@@ -343,6 +404,9 @@ export function ModSuggestionsPage() {
     }));
   };
 
+  const draftSource = parseModSourceUrl(draft.sourceUrl);
+  const isCurseForgeDraft = draftSource?.platform === "curseforge";
+
   return (
     <div className="flex flex-col gap-5">
       <PageShell
@@ -350,19 +414,13 @@ export function ModSuggestionsPage() {
         description={`Stage mods to check or download later - ${filteredSuggestions.length} of ${suggestions.length} shown${matchedSuggestionCount > 0 ? ` · ${matchedSuggestionCount} already installed` : ""}`}
         controls={
           <>
-            <select
-              className="h-9 rounded-md border border-[var(--color-input)] bg-[var(--color-muted)] px-3 text-sm"
+            <ThemedSelect
+              className="min-w-[11rem]"
               value={instanceId ?? ""}
-              onChange={(event) => setSelectedInstance(event.target.value || null)}
+              onValueChange={(value) => setSelectedInstance(value || null)}
               aria-label="Select instance"
-            >
-              <option value="">Select instance</option>
-              {instances.map((instance) => (
-                <option key={instance.id} value={instance.id}>
-                  {instance.name}
-                </option>
-              ))}
-            </select>
+              options={[{ value: "", label: "Select instance" }, ...instances.map((instance) => ({ value: instance.id, label: instance.name }))]}
+            />
             <Button onClick={openNewSuggestionModal} disabled={!instanceId}>
               <Plus className="h-4 w-4" />
               Add Suggestion
@@ -458,7 +516,16 @@ export function ModSuggestionsPage() {
                 </div>
               </div>
               <div className="min-h-0 flex-1 overflow-auto rounded-md border border-[var(--color-border)] bg-[var(--color-background)]">
-                <SourcePreviewContent preview={preview} />
+                <SourcePreviewContent
+                  preview={preview}
+                  project={previewProject}
+                  loading={previewProjectLoading}
+                  error={
+                    previewProjectError instanceof Error
+                      ? previewProjectError.message
+                      : null
+                  }
+                />
               </div>
               <Button variant="outline" onClick={() => openUrl(preview.url)}>
                 <ExternalLink className="h-4 w-4" />
@@ -502,22 +569,17 @@ export function ModSuggestionsPage() {
               />
             </Field>
             <Field label="Loader">
-              <select
-                className="flex h-9 w-full rounded-md border border-[var(--color-input)] bg-[var(--color-muted)] px-3 text-sm"
+              <ThemedSelect
+                className="w-full"
                 value={draft.loader}
-                onChange={(event) =>
+                onValueChange={(value) =>
                   setDraft((current) => ({
                     ...current,
-                    loader: event.target.value as ModLoaderKind,
+                    loader: value as ModLoaderKind,
                   }))
                 }
-              >
-                {LOADERS.map((loader) => (
-                  <option key={loader} value={loader}>
-                    {formatLoader(loader)}
-                  </option>
-                ))}
-              </select>
+                options={LOADERS.map((value) => ({ value, label: formatLoader(value) }))}
+              />
             </Field>
             <Field label="Source URL">
               <Input
@@ -528,6 +590,33 @@ export function ModSuggestionsPage() {
                 placeholder="https://modrinth.com/mod/... or https://curseforge.com/minecraft/mc-mods/..."
               />
             </Field>
+            {isCurseForgeDraft && (
+              <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-sm text-amber-100">
+                CurseForge links are saved as a source only. Fill in the details below manually; Modly will not fetch metadata from CurseForge.
+              </div>
+            )}
+            {isCurseForgeDraft && (
+              <div className="grid gap-4 rounded-md border border-[var(--color-border)] bg-[var(--color-muted)]/25 p-3 sm:grid-cols-2">
+                <Field label="Version">
+                  <Input
+                    value={draft.version}
+                    onChange={(event) => setDraft((current) => ({ ...current, version: event.target.value }))}
+                    placeholder="e.g. 1.2.3"
+                  />
+                </Field>
+                <Field label="Side">
+                  <ThemedSelect
+                    className="w-full"
+                    value={draft.side}
+                    onValueChange={(value) => setDraft((current) => ({ ...current, side: value as ModSide }))}
+                    options={SIDES.map((value) => ({ value, label: value === "unknown" ? "Unknown" : value === "client" ? "Client" : value === "server" ? "Server" : "Both" }))}
+                  />
+                </Field>
+                <p className="sm:col-span-2 text-xs text-[var(--color-muted-foreground)]">
+                  Name, loader, categories, and optional downloaded file remain editable above and below this section.
+                </p>
+              </div>
+            )}
             <Field label="Downloaded file (optional)">
               <div className="flex gap-2">
                 <Input
@@ -591,76 +680,79 @@ export function ModSuggestionsPage() {
       </Dialog>
 
       <Dialog
-        open={installDialogOpen}
+        open={installState.open}
         onOpenChange={(open) => {
-          setInstallDialogOpen(open);
-          if (!open) {
-            setInstallTarget(null);
-            setInstallError(null);
-            setVersionOptions([]);
-            setSelectedVersionId("");
-          }
+          if (!open) resetInstallState();
         }}
       >
         <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle>Install suggestion</DialogTitle>
             <DialogDescription>
-              {installTarget
-                ? `Choose a compatible file for ${installTarget.metadata?.name ?? installTarget.fileName}.`
+              {installState.target
+                ? `Choose a compatible file for ${installState.target.metadata?.name ?? installState.target.fileName}.`
                 : "Choose a compatible file."}
             </DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-4 py-2">
             <Field label="Loader">
-              <select
-                className="flex h-9 w-full rounded-md border border-[var(--color-input)] bg-[var(--color-muted)] px-3 text-sm"
-                value={installLoader}
-                onChange={(event) => setInstallLoader(event.target.value as ModLoaderKind | "")}
-              >
-                <option value="">Any loader</option>
-                {VERSION_LOADERS.filter(Boolean).map((loader) => (
-                  <option key={loader} value={loader}>
-                    {formatLoader(loader)}
-                  </option>
-                ))}
-              </select>
+              <ThemedSelect
+                className="w-full"
+                value={installState.loader}
+                onValueChange={(value) =>
+                  setInstallState((current) => ({
+                    ...current,
+                    loader: value as ModLoaderKind | "",
+                  }))
+                }
+                options={[{ value: "", label: "Any loader" }, ...VERSION_LOADERS.filter(Boolean).map((value) => ({ value, label: formatLoader(value) }))]}
+              />
             </Field>
             <Field label="Minecraft version">
               <div className="flex gap-2">
                 <Input
-                  value={installGameVersion}
-                  onChange={(event) => setInstallGameVersion(event.target.value)}
+                  value={installState.gameVersion}
+                  onChange={(event) =>
+                    setInstallState((current) => ({
+                      ...current,
+                      gameVersion: event.target.value,
+                    }))
+                  }
                   placeholder="1.21.1"
                 />
                 <Button
                   type="button"
                   variant="outline"
                   onClick={reloadInstallVersions}
-                  disabled={!installTarget || suggestionVersions.isPending}
+                  disabled={!installState.target || suggestionVersions.isPending}
                 >
                   {suggestionVersions.isPending ? "Checking..." : "Check versions"}
                 </Button>
               </div>
             </Field>
 
-            {installError && (
+            {installState.error && (
               <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-sm text-amber-100">
-                {installError}
+                {installState.error}
               </div>
             )}
 
-            {versionOptions.length > 0 && (
+            {installState.versionOptions.length > 0 && (
               <Field label="Available files">
                 <div className="max-h-64 space-y-2 overflow-auto rounded-md border border-[var(--color-border)] p-2">
-                  {versionOptions.map((option) => (
+                  {installState.versionOptions.map((option) => (
                     <button
                       key={option.versionId}
                       type="button"
-                      onClick={() => setSelectedVersionId(option.versionId)}
+                      onClick={() =>
+                        setInstallState((current) => ({
+                          ...current,
+                          selectedVersionId: option.versionId,
+                        }))
+                      }
                       className={`w-full rounded-md border px-3 py-2 text-left transition ${
-                        selectedVersionId === option.versionId
+                        installState.selectedVersionId === option.versionId
                           ? "border-[var(--color-primary)] bg-[var(--color-muted)]"
                           : "border-[var(--color-border)] hover:bg-[var(--color-muted)]/60"
                       }`}
@@ -682,7 +774,7 @@ export function ModSuggestionsPage() {
               </Field>
             )}
 
-            {!versionOptions.length && installTarget?.filePath && (
+            {!installState.versionOptions.length && installState.target?.filePath && (
               <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-muted)]/40 px-3 py-2 text-sm text-[var(--color-muted-foreground)]">
                 No matching source file selected yet. You can still install using the attached jar.
               </div>
@@ -690,16 +782,16 @@ export function ModSuggestionsPage() {
           </div>
 
           <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setInstallDialogOpen(false)}>
+            <Button variant="ghost" onClick={resetInstallState}>
               Cancel
             </Button>
             <Button
               onClick={() => void confirmInstallSuggestion()}
               disabled={
-                !installTarget ||
+                !installState.target ||
                 promoteSuggestion.isPending ||
                 installSuggestion.isPending ||
-                (!selectedVersionId && !installTarget.filePath)
+                (!installState.selectedVersionId && !installState.target.filePath)
               }
             >
               {promoteSuggestion.isPending || installSuggestion.isPending ? "Installing..." : "Install"}
@@ -728,11 +820,17 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 function SourcePreviewContent({
   preview,
+  project,
+  loading,
+  error,
 }: {
   preview: NonNullable<ReturnType<typeof parseModSourceUrl>>;
+  project: ModrinthProjectSummary | null;
+  loading: boolean;
+  error: string | null;
 }) {
   if (preview.platform === "modrinth") {
-    return <ModrinthPreview projectSlug={preview.project} />;
+    return <ModrinthPreview project={project} loading={loading} error={error} />;
   }
 
   return (
@@ -748,40 +846,15 @@ function SourcePreviewContent({
   );
 }
 
-function ModrinthPreview({ projectSlug }: { projectSlug: string }) {
-  const [project, setProject] = useState<ModrinthProject | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    setProject(null);
-    setError(null);
-    setLoading(true);
-
-    fetch(`https://api.modrinth.com/v2/project/${encodeURIComponent(projectSlug)}`, {
-      signal: controller.signal,
-    })
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error(`Modrinth returned ${response.status}`);
-        }
-        return response.json() as Promise<ModrinthProject>;
-      })
-      .then((data) => setProject(data))
-      .catch((fetchError) => {
-        if (controller.signal.aborted) return;
-        setError(fetchError instanceof Error ? fetchError.message : "Could not load preview");
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) {
-          setLoading(false);
-        }
-      });
-
-    return () => controller.abort();
-  }, [projectSlug]);
-
+function ModrinthPreview({
+  project,
+  loading,
+  error,
+}: {
+  project: ModrinthProjectSummary | null;
+  loading: boolean;
+  error: string | null;
+}) {
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-[var(--color-muted-foreground)]">
@@ -790,7 +863,7 @@ function ModrinthPreview({ projectSlug }: { projectSlug: string }) {
     );
   }
 
-  if (error || !project) {
+  if (!project) {
     return (
       <div className="flex h-full flex-col justify-center gap-3 p-5 text-sm text-[var(--color-muted-foreground)]">
         <p className="font-medium text-[var(--color-foreground)]">Preview unavailable</p>
@@ -802,9 +875,9 @@ function ModrinthPreview({ projectSlug }: { projectSlug: string }) {
   return (
     <div className="space-y-5 p-5">
       <div className="flex items-start gap-4">
-        {project.icon_url && (
+        {project.iconUrl && (
           <img
-            src={project.icon_url}
+            src={project.iconUrl}
             alt=""
             className="h-16 w-16 shrink-0 rounded-lg border border-[var(--color-border)] object-cover"
           />
@@ -824,11 +897,11 @@ function ModrinthPreview({ projectSlug }: { projectSlug: string }) {
         <Stat label="Followers" value={formatCount(project.followers)} />
       </div>
 
-      <PreviewBadgeGroup label="Loaders" values={project.loaders ?? []} />
-      <PreviewBadgeGroup label="Categories" values={project.categories ?? []} />
+      <PreviewBadgeGroup label="Loaders" values={project.loaders} />
+      <PreviewBadgeGroup label="Categories" values={project.categories} />
       <PreviewBadgeGroup
         label="Game versions"
-        values={(project.game_versions ?? []).slice(-8).reverse()}
+        values={project.gameVersions.slice(-8).reverse()}
       />
 
       {project.body && (
@@ -869,7 +942,7 @@ function PreviewBadgeGroup({ label, values }: { label: string; values: string[] 
   );
 }
 
-function formatCount(value?: number) {
+function formatCount(value?: number | null) {
   return new Intl.NumberFormat(undefined, { notation: "compact" }).format(value ?? 0);
 }
 
@@ -1093,7 +1166,8 @@ function buildSuggestionMatches(
 ): Map<string, ModFile> {
   const byHash = new Map<string, ModFile>();
   const byModId = new Map<string, ModFile>();
-  const byName = new Map<string, ModFile>();
+  const byProjectId = new Map<string, ModFile>();
+  const byFileName = new Map<string, ModFile>();
 
   for (const mod of mods) {
     if (mod.hashSha256) {
@@ -1103,11 +1177,15 @@ function buildSuggestionMatches(
     if (modId) {
       byModId.set(modId, mod);
     }
-    const names = [mod.metadata?.name, mod.fileName].map(normalizeMatchText).filter(Boolean);
-    for (const name of names) {
-      if (!byName.has(name)) {
-        byName.set(name, mod);
-      }
+    const projectId = parseModSourceUrl(mod.metadata?.modrinthUrl ?? mod.sourceUrl)?.platform === "modrinth"
+      ? parseModSourceUrl(mod.metadata?.modrinthUrl ?? mod.sourceUrl)?.project
+      : null;
+    if (projectId && !byProjectId.has(projectId)) {
+      byProjectId.set(projectId, mod);
+    }
+    const fileName = normalizeMatchText(mod.fileName);
+    if (fileName && !byFileName.has(fileName)) {
+      byFileName.set(fileName, mod);
     }
   }
 
@@ -1125,12 +1203,15 @@ function buildSuggestionMatches(
       continue;
     }
 
-    const names = [suggestion.metadata?.name, suggestion.fileName]
-      .map(normalizeMatchText)
-      .filter(Boolean);
-    const matched = names.find((name) => byName.has(name));
-    if (matched) {
-      matches.set(suggestion.id, byName.get(matched)!);
+    const source = parseModSourceUrl(suggestion.sourceUrl);
+    if (source?.platform === "modrinth" && byProjectId.has(source.project)) {
+      matches.set(suggestion.id, byProjectId.get(source.project)!);
+      continue;
+    }
+
+    const fileName = normalizeMatchText(suggestion.fileName);
+    if (fileName && byFileName.has(fileName)) {
+      matches.set(suggestion.id, byFileName.get(fileName)!);
     }
   }
 

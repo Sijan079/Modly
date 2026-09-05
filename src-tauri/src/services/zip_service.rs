@@ -8,7 +8,8 @@ use walkdir::WalkDir;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
-use crate::models::instance::Instance;
+use crate::models::instance::{ExportModAudience, ExportModFilters, ExportModState, Instance};
+use crate::models::mod_metadata::{ModFile, ModSide};
 use crate::models::pack_item::PackType;
 
 pub fn extract_zip(archive_path: &Path, dest_dir: &Path) -> Result<()> {
@@ -129,6 +130,19 @@ pub struct ImportedInstanceMetadata {
     pub config_path: Option<String>,
 }
 
+pub type ModExportFilter = ExportModFilters;
+pub type ModExportAudience = ExportModAudience;
+pub type ModExportState = ExportModState;
+
+pub fn filter_mods_for_export<'a>(
+    mods: &'a [ModFile],
+    filter: &ModExportFilter,
+) -> Vec<&'a ModFile> {
+    mods.iter()
+        .filter(|mod_file| matches_mod_filter(mod_file, filter))
+        .collect()
+}
+
 pub fn create_instance_export_zip(
     instance: &Instance,
     output_path: &Path,
@@ -201,6 +215,63 @@ pub fn create_instance_export_zip(
 
     zip.finish()?;
     Ok(())
+}
+
+pub fn create_mods_only_export_zip(
+    output_path: &Path,
+    mods_dir: &Path,
+    mod_paths: &[PathBuf],
+) -> Result<()> {
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let file = File::create(output_path)?;
+    let mut zip = ZipWriter::new(file);
+    let zip_options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+    zip.add_directory("mods/", zip_options)?;
+    for mod_path in mod_paths {
+        if mod_path.exists() && mod_path.is_file() {
+            add_file_to_zip(&mut zip, mod_path, mods_dir, "mods", zip_options)?;
+        }
+    }
+
+    zip.finish()?;
+    Ok(())
+}
+
+fn matches_mod_filter(mod_file: &ModFile, filter: &ModExportFilter) -> bool {
+    match filter.mod_state {
+        ModExportState::Enabled if !mod_file.enabled => return false,
+        ModExportState::Disabled if mod_file.enabled => return false,
+        _ => {}
+    }
+
+    let side = mod_file
+        .metadata
+        .as_ref()
+        .map(|metadata| metadata.side)
+        .unwrap_or(ModSide::Unknown);
+
+    match filter.mod_audience {
+        ModExportAudience::Player if side != ModSide::Client && side != ModSide::Both => {
+            return false
+        }
+        ModExportAudience::Server if side != ModSide::Server && side != ModSide::Both => {
+            return false
+        }
+        _ => {}
+    }
+
+    if let Some(category_id) = filter.mod_category_id.as_deref() {
+        return mod_file
+            .categories
+            .iter()
+            .any(|category| category.id == category_id);
+    }
+
+    true
 }
 
 fn add_path_to_zip(
@@ -348,6 +419,8 @@ fn rebase_import_override(
 mod tests {
     use super::*;
     use crate::models::instance::LoaderType;
+    use crate::models::mod_metadata::{LoaderKind, ModFile, ModMetadata, ModSide};
+    use crate::models::category::InstanceCategory;
     use uuid::Uuid;
 
     fn test_dir() -> PathBuf {
@@ -449,6 +522,90 @@ mod tests {
         serde_json::from_str(&contents).expect("manifest should parse")
     }
 
+    fn sample_mod(
+        instance_id: &str,
+        file_name: &str,
+        enabled: bool,
+        side: ModSide,
+        category_names: &[&str],
+    ) -> ModFile {
+        ModFile {
+            id: format!("{file_name}-id"),
+            instance_id: instance_id.to_string(),
+            file_name: file_name.to_string(),
+            file_path: format!("C:\\mods\\{file_name}"),
+            installed_at: "now".to_string(),
+            enabled,
+            hash_sha256: None,
+            source_url: None,
+            metadata: Some(ModMetadata {
+                name: file_name.trim_end_matches(".jar").to_string(),
+                version: "1.0.0".to_string(),
+                authors: vec![],
+                modrinth_url: None,
+                dependencies: vec![],
+                loader: LoaderKind::Fabric,
+                side,
+                mod_id: None,
+                installed_modrinth_version_id: None,
+                customized: false,
+                name_is_fallback: false,
+            }),
+            categories: category_names
+                .iter()
+                .map(|name| InstanceCategory {
+                    id: format!("{name}-id"),
+                    instance_id: instance_id.to_string(),
+                    name: (*name).to_string(),
+                })
+                .collect(),
+            related_mods: vec![],
+        }
+    }
+
+    #[test]
+    fn mod_filter_player_only_keeps_client_and_both() {
+        let mods = vec![
+            sample_mod("instance-1", "client.jar", true, ModSide::Client, &[]),
+            sample_mod("instance-1", "server.jar", true, ModSide::Server, &[]),
+            sample_mod("instance-1", "both.jar", true, ModSide::Both, &[]),
+            sample_mod("instance-1", "unknown.jar", true, ModSide::Unknown, &[]),
+        ];
+
+        let filtered = filter_mods_for_export(&mods, &ModExportFilter {
+            mod_audience: ModExportAudience::Player,
+            mod_category_id: None,
+            mod_state: ModExportState::Enabled,
+        });
+
+        let names = filtered
+            .iter()
+            .map(|mod_file| mod_file.file_name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["client.jar", "both.jar"]);
+    }
+
+    #[test]
+    fn mod_filter_can_target_disabled_mods_in_category() {
+        let mods = vec![
+            sample_mod("instance-1", "client.jar", true, ModSide::Client, &["Adventure"]),
+            sample_mod("instance-1", "server.jar", false, ModSide::Server, &["Adventure"]),
+            sample_mod("instance-1", "both.jar", false, ModSide::Both, &["Tech"]),
+        ];
+
+        let filtered = filter_mods_for_export(&mods, &ModExportFilter {
+            mod_audience: ModExportAudience::Any,
+            mod_category_id: Some("Adventure-id".to_string()),
+            mod_state: ModExportState::Disabled,
+        });
+
+        let names = filtered
+            .iter()
+            .map(|mod_file| mod_file.file_name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["server.jar"]);
+    }
+
     #[test]
     fn export_uses_override_paths_and_manifest() {
         let root = test_dir();
@@ -548,6 +705,35 @@ mod tests {
         let entries = read_archive_entries(&archive_path);
         assert!(entries.contains(&"config/options.txt".to_string()));
         assert!(!entries.contains(&"modly-instance.json".to_string()));
+    }
+
+    #[test]
+    fn mods_only_export_writes_only_filtered_mod_entries() {
+        let root = test_dir();
+        let archive_path = root.join("mods-only.zip");
+        let mods_dir = root.join("instance").join("mods");
+        write_file(&mods_dir.join("enabled-a.jar"), "enabled-a");
+        write_file(&mods_dir.join("disabled-b.jar.disabled"), "disabled-b");
+
+        create_mods_only_export_zip(
+            &archive_path,
+            &mods_dir,
+            &[
+                mods_dir.join("enabled-a.jar"),
+                mods_dir.join("disabled-b.jar.disabled"),
+            ],
+        )
+        .expect("mods-only export should succeed");
+
+        let entries = read_archive_entries(&archive_path);
+        assert_eq!(
+            entries,
+            vec![
+                "mods/".to_string(),
+                "mods/enabled-a.jar".to_string(),
+                "mods/disabled-b.jar.disabled".to_string(),
+            ]
+        );
     }
 
     #[test]

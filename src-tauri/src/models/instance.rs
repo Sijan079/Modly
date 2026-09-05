@@ -111,6 +111,30 @@ pub struct UpdateInstanceInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ExportModFilters {
+    pub mod_audience: ExportModAudience,
+    pub mod_category_id: Option<String>,
+    pub mod_state: ExportModState,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ExportModAudience {
+    Any,
+    Player,
+    Server,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ExportModState {
+    Enabled,
+    Disabled,
+    Both,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExportInstanceZipInput {
     pub instance_id: String,
     pub output_path: String,
@@ -120,6 +144,19 @@ pub struct ExportInstanceZipInput {
     pub include_shader_packs: bool,
     pub include_datapacks: bool,
     pub include_manifest: bool,
+    pub mod_audience: ExportModAudience,
+    pub mod_category_id: Option<String>,
+    pub mod_state: ExportModState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportModsZipInput {
+    pub instance_id: String,
+    pub output_path: String,
+    pub mod_audience: ExportModAudience,
+    pub mod_category_id: Option<String>,
+    pub mod_state: ExportModState,
 }
 
 #[cfg(test)]

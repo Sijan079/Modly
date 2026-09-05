@@ -21,6 +21,7 @@ pub struct AppSettings {
     pub modrinth_enabled: bool,
     /// Reserved for future CurseForge integration
     pub curseforge_enabled: bool,
+    pub launch_window_mode: String,
 }
 
 impl Default for AppSettings {
@@ -42,6 +43,7 @@ impl Default for AppSettings {
             last_instance_id: None,
             modrinth_enabled: false,
             curseforge_enabled: false,
+            launch_window_mode: "maximized".to_string(),
         }
     }
 }

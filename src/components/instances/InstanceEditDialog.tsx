@@ -9,6 +9,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ThemedSelect } from "@/components/ui/themed-select";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Download, FolderOpen } from "lucide-react";
 import type { Instance, LoaderType, UpdateInstanceInput } from "@/lib/types";
@@ -151,19 +152,13 @@ export function InstanceEditDialog({
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="instance-loader">Loader</Label>
-              <select
+              <ThemedSelect
                 id="instance-loader"
-                className="flex h-9 w-full rounded-md border border-[var(--color-input)] bg-[var(--color-muted)] px-3 text-sm"
+                className="w-full"
                 value={loader}
-                onChange={(event) => setLoader(event.target.value as LoaderType)}
-              >
-                <option value="vanilla">Vanilla</option>
-                <option value="fabric">Fabric</option>
-                <option value="forge">Forge</option>
-                <option value="neoforge">NeoForge</option>
-                <option value="quilt">Quilt</option>
-                <option value="unknown">Unknown</option>
-              </select>
+                onValueChange={(value) => setLoader(value as LoaderType)}
+                options={["vanilla", "fabric", "forge", "neoforge", "quilt", "unknown"].map((value) => ({ value, label: value === "neoforge" ? "NeoForge" : value[0].toUpperCase() + value.slice(1) }))}
+              />
             </div>
 
             <div className="space-y-2">

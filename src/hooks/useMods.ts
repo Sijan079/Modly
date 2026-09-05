@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type {
+  ModrinthProjectSummary,
   ModRelationshipGraph,
   ModRelationshipsForMod,
   UpdateModMetadataInput,
+  BulkUpdateModMetadataInput,
   UpsertModSuggestionInput,
 } from "@/lib/types";
 
@@ -21,6 +23,7 @@ export function useScanMods() {
     mutationFn: (instanceId: string) => api.mods.scan(instanceId),
     onSuccess: (_, instanceId) => {
       qc.invalidateQueries({ queryKey: ["mods", instanceId] });
+      qc.invalidateQueries({ queryKey: ["instance-relationship-graph", instanceId] });
       qc.invalidateQueries({ queryKey: ["instances"] });
     },
   });
@@ -134,6 +137,16 @@ export function useInstallSuggestion() {
   });
 }
 
+export function useModrinthProjects(projectIds: string[]) {
+  const normalizedIds = [...projectIds].sort();
+  return useQuery<ModrinthProjectSummary[]>({
+    queryKey: ["modrinth-projects", normalizedIds],
+    queryFn: () => api.updates.modrinthProjects(normalizedIds),
+    enabled: normalizedIds.length > 0,
+    staleTime: 1000 * 60 * 30,
+  });
+}
+
 export function useDeleteMod() {
   const qc = useQueryClient();
   return useMutation({
@@ -157,6 +170,19 @@ export function useUpdateModMetadata() {
       qc.invalidateQueries({ queryKey: ["mod-relationships", mod.id] });
       qc.invalidateQueries({ queryKey: ["instances"] });
       qc.invalidateQueries({ queryKey: ["categories", mod.instanceId] });
+    },
+  });
+}
+
+export function useBulkUpdateModMetadata() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: BulkUpdateModMetadataInput) => api.mods.bulkUpdateMetadata(input),
+    onSuccess: (_mods, input) => {
+      qc.invalidateQueries({ queryKey: ["mods", input.instanceId] });
+      qc.invalidateQueries({ queryKey: ["instance-relationship-graph", input.instanceId] });
+      qc.invalidateQueries({ queryKey: ["instances"] });
+      qc.invalidateQueries({ queryKey: ["categories", input.instanceId] });
     },
   });
 }

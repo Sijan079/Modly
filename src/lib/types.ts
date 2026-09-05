@@ -86,6 +86,15 @@ export interface ExportModListInput {
   outputPath: string;
 }
 
+export type ExportModAudience = "any" | "player" | "server";
+export type ExportModState = "enabled" | "disabled" | "both";
+
+export interface ExportModFilters {
+  modAudience: ExportModAudience;
+  modCategoryId: string | null;
+  modState: ExportModState;
+}
+
 export type ModLoaderKind =
   | "fabric"
   | "forge"
@@ -106,6 +115,7 @@ export interface ModMetadata {
   modId: string | null;
   installedModrinthVersionId?: string | null;
   customized?: boolean;
+  nameIsFallback?: boolean;
 }
 
 export interface CreateCategoryInput {
@@ -136,6 +146,14 @@ export interface UpdateModMetadataInput {
   relatedMods: UpdateModRelationshipInput[];
 }
 
+export interface BulkUpdateModMetadataInput {
+  instanceId: string;
+  modIds: string[];
+  categoryIds: string[];
+  loader: ModLoaderKind;
+  side: ModSide;
+}
+
 export interface UpsertModSuggestionInput {
   id?: string | null;
   instanceId: string;
@@ -148,6 +166,7 @@ export interface UpsertModSuggestionInput {
   version: string;
   authors: string[];
   loader: ModLoaderKind;
+  side: ModSide;
   modIdField?: string | null;
   categoryIds: string[];
 }
@@ -257,6 +276,7 @@ export interface AppSettings {
   lastInstanceId: string | null;
   modrinthEnabled: boolean;
   curseforgeEnabled: boolean;
+  launchWindowMode: "maximized" | "fullscreen" | "windowed";
 }
 
 export interface LogEntry {
@@ -381,6 +401,19 @@ export interface SuggestionVersionOption {
   releaseDate: string;
 }
 
+export interface ModrinthProjectSummary {
+  projectId: string;
+  title: string;
+  description: string;
+  body: string | null;
+  iconUrl: string | null;
+  downloads: number | null;
+  followers: number | null;
+  categories: string[];
+  gameVersions: string[];
+  loaders: string[];
+}
+
 export interface InstallSuggestionFromModrinthInput {
   suggestionId: string;
   versionId: string;
@@ -424,4 +457,12 @@ export interface ExportInstanceZipInput {
   includeShaderPacks: boolean;
   includeDatapacks: boolean;
   includeManifest: boolean;
+  modAudience: ExportModAudience;
+  modCategoryId: string | null;
+  modState: ExportModState;
+}
+
+export interface ExportModsZipInput extends ExportModFilters {
+  instanceId: string;
+  outputPath: string;
 }

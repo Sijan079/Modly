@@ -19,10 +19,12 @@ import {
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { ThemedSelect } from "@/components/ui/themed-select";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { ExportZipDialog } from "@/components/instances/ExportZipDialog";
 import { PageShell } from "@/components/layout/PageShell";
+import { useCategories } from "@/hooks/useCategories";
 import { useInstances } from "@/hooks/useInstances";
 import { useCheckModIntegrity, useLatestModIntegrityAudit, useMods } from "@/hooks/useMods";
 import { usePacks } from "@/hooks/usePacks";
@@ -52,6 +54,7 @@ export function DashboardPage() {
 
   const instanceId = selectedInstance?.id ?? null;
   const { data: mods = [] } = useMods(instanceId);
+  const { data: categories = [] } = useCategories(instanceId);
   const { data: latestIntegrityAudit = null } = useLatestModIntegrityAudit(instanceId);
   const { data: resourcePacks = [] } = usePacks(instanceId, "resourcePack");
   const { data: shaderPacks = [] } = usePacks(instanceId, "shaderPack");
@@ -174,7 +177,7 @@ export function DashboardPage() {
     <div className="space-y-5">
       <PageShell
         title="Dashboard"
-        description="Plan, audit, and export the selected modpack"
+        description="Overview and export"
       />
 
       {!selectedInstance ? (
@@ -182,25 +185,19 @@ export function DashboardPage() {
       ) : (
         <>
           <Card>
-            <CardContent className="grid gap-5 p-5 lg:grid-cols-[1.35fr_0.65fr]">
+            <CardContent className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="truncate text-2xl font-semibold">
                     {selectedInstance.name}
                   </h2>
-                  <select
-                    className="h-9 max-w-full rounded-md border border-[var(--color-input)] bg-[var(--color-muted)] px-3 text-sm"
+                  <ThemedSelect
+                    className="max-w-full min-w-[11rem]"
                     value={instanceId ?? ""}
-                    onChange={(event) => setSelectedInstance(event.target.value || null)}
+                    onValueChange={(value) => setSelectedInstance(value || null)}
                     aria-label="Select instance"
-                  >
-                    <option value="">Select instance</option>
-                    {instances.map((instance) => (
-                      <option key={instance.id} value={instance.id}>
-                        {instance.name}
-                      </option>
-                    ))}
-                  </select>
+                    options={[{ value: "", label: "Select instance" }, ...instances.map((instance) => ({ value: instance.id, label: instance.name }))]}
+                  />
                   <Badge variant="secondary">{formatLoader(selectedInstance.loader)}</Badge>
                   {selectedInstance.mcVersion && (
                     <Badge variant="outline">{selectedInstance.mcVersion}</Badge>
@@ -209,25 +206,19 @@ export function DashboardPage() {
                 <p className="mt-2 truncate text-sm text-[var(--color-muted-foreground)]">
                   {selectedInstance.gameDir}
                 </p>
-                <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="mt-4 grid gap-3 sm:grid-cols-3">
                   <Metric label="Mods" value={mods.length} detail={`${planningStats.enabledMods} enabled`} />
-                  <Metric
-                    label="DSR Packs"
-                    value={resourcePacks.length + shaderPacks.length + datapacks.length}
+                  <DsrPacksMetric
+                    datapacks={datapacks.length}
+                    shaderPacks={shaderPacks.length}
+                    resourcePacks={resourcePacks.length}
                   />
-                  <Metric label="Shader Packs" value={shaderPacks.length} />
-                  <Metric label="Datapacks" value={datapacks.length} />
                   <Metric label="Config Files" value={planningStats.configCount} />
                 </div>
               </div>
 
-              <div className="flex flex-col justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-muted)]/35 p-4">
-                <div>
-                  <p className="text-sm font-medium">Planning Actions</p>
-                  <p className="mt-1 text-xs text-[var(--color-muted-foreground)]">
-                    Refresh the catalog before reviewing or exporting this modpack.
-                  </p>
-                </div>
+              <div className="flex flex-col justify-center gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-muted)]/35 p-3.5">
+                <p className="px-0.5 text-xs font-semibold uppercase tracking-[0.1em] text-[var(--color-muted-foreground)]">Actions</p>
                 <div className="grid grid-cols-2 gap-2">
                   <Button
                     onClick={() => scanAllMutation.mutate(selectedInstance)}
@@ -275,7 +266,7 @@ export function DashboardPage() {
               <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-base">
                   <ShieldAlert className="h-4 w-4 text-[var(--color-primary)]" />
-                  Needs Attention
+                  Status
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
@@ -283,8 +274,8 @@ export function DashboardPage() {
                 {attentionItems.length === 0 ? (
                   <AttentionRow
                     tone="good"
-                    title="Catalog looks clean"
-                    detail="No obvious planning issues found for this instance."
+                    title="No issues"
+                    detail="Nothing flagged."
                   />
                 ) : (
                   attentionItems.map((item) => (
@@ -303,7 +294,7 @@ export function DashboardPage() {
               <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-base">
                   <ListChecks className="h-4 w-4 text-[var(--color-primary)]" />
-                  Planning Breakdown
+                  Breakdown
                 </CardTitle>
               </CardHeader>
               <CardContent className="grid gap-3 sm:grid-cols-2">
@@ -348,7 +339,7 @@ export function DashboardPage() {
             <CardContent>
               {recentActivity.length === 0 ? (
                 <p className="text-sm text-[var(--color-muted-foreground)]">
-                  No activity recorded yet.
+                  No activity.
                 </p>
               ) : (
                 <div className="divide-y divide-[var(--color-border)]">
@@ -363,6 +354,8 @@ export function DashboardPage() {
           <ExportZipDialog
             instance={selectedInstance}
             open={exportDialogOpen}
+            mods={mods}
+            categories={categories}
             exporting={exportZipMutation.isPending}
             onOpenChange={setExportDialogOpen}
             onConfirm={async (instance, options) => {
@@ -384,7 +377,7 @@ function EmptyDashboard() {
         <div>
           <h2 className="text-lg font-semibold">No modpack selected</h2>
           <p className="mt-1 max-w-md text-sm text-[var(--color-muted-foreground)]">
-            Create or select an instance to see planning stats, cleanup checks, and recent activity.
+            Create or select an instance to continue.
           </p>
         </div>
         <Button asChild>
@@ -409,6 +402,28 @@ function Metric({
       <p className="text-xs text-[var(--color-muted-foreground)]">{label}</p>
       <p className="mt-1 text-2xl font-semibold">{value}</p>
       {detail && <p className="mt-1 text-xs text-[var(--color-muted-foreground)]">{detail}</p>}
+    </div>
+  );
+}
+
+function DsrPacksMetric({
+  datapacks,
+  shaderPacks,
+  resourcePacks,
+}: {
+  datapacks: number;
+  shaderPacks: number;
+  resourcePacks: number;
+}) {
+  return (
+    <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-muted)]/35 p-3">
+      <p className="text-xs text-[var(--color-muted-foreground)]">DSR Packs</p>
+      <p className="mt-1 text-2xl font-semibold tabular-nums">
+        {datapacks} <span className="text-[var(--color-muted-foreground)]">/</span> {shaderPacks} <span className="text-[var(--color-muted-foreground)]">/</span> {resourcePacks}
+      </p>
+      <p className="mt-1 truncate text-xs text-[var(--color-muted-foreground)]">
+        Datapacks / Shaders / Resource packs
+      </p>
     </div>
   );
 }
@@ -461,7 +476,7 @@ function BreakdownItem({
       </div>
       <Progress value={percent} className="mt-3" />
       <p className="mt-2 text-xs text-[var(--color-muted-foreground)]">
-        {total > 0 ? `${percent}% of related catalog` : "No catalog data yet"}
+        {total > 0 ? `${percent}%` : "0%"}
       </p>
     </div>
   );
@@ -532,7 +547,7 @@ function getAttentionItems({
     items.push({
       tone: "warn",
       title: "Security audit not run",
-      detail: "Run an audit before trusting this modpack plan.",
+      detail: "Run an audit.",
     });
   } else if (integrityAudit.corruptedMods > 0) {
     items.push({
@@ -559,42 +574,42 @@ function getAttentionItems({
     items.push({
       tone: "warn",
       title: "Mods folder not detected",
-      detail: "Run Scan All after checking the instance path.",
+      detail: "Check the instance path.",
     });
   }
   if (unknownMods > 0) {
     items.push({
       tone: "warn",
       title: `${unknownMods} mod${unknownMods === 1 ? "" : "s"} need metadata review`,
-      detail: "Open Mods to fill in missing names, loaders, or IDs.",
+      detail: "Metadata is incomplete.",
     });
   }
   if (uncategorizedMods > 0) {
     items.push({
       tone: "warn",
       title: `${uncategorizedMods} uncategorized mod${uncategorizedMods === 1 ? "" : "s"}`,
-      detail: "Categories make planning and export review easier.",
+      detail: "No category assigned.",
     });
   }
   if (disabledMods > 0) {
     items.push({
       tone: "warn",
       title: `${disabledMods} disabled mod${disabledMods === 1 ? "" : "s"} in this pack`,
-      detail: "Review whether these should stay in the planning catalog.",
+      detail: "Disabled files are present.",
     });
   }
   if (duplicateFiles > 0) {
     items.push({
       tone: "warn",
       title: "Duplicate mod filenames detected",
-      detail: "Check for accidental duplicate files before exporting.",
+      detail: "Duplicate names found.",
     });
   }
   if (configCount === 0) {
     items.push({
       tone: "warn",
       title: "No config files found",
-      detail: "This may be expected for a fresh pack, but review configs before release.",
+      detail: "Config folder is empty.",
     });
   }
 

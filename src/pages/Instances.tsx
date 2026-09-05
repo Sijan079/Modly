@@ -19,6 +19,8 @@ import {
   useCreateInstance,
   useDeleteInstance,
 } from "@/hooks/useInstances";
+import { useCategories } from "@/hooks/useCategories";
+import { useMods } from "@/hooks/useMods";
 import { useAppStore, filterInstances } from "@/store/app";
 import { useConfigsStore } from "@/store/configsStore";
 import { api } from "@/lib/api";
@@ -27,7 +29,6 @@ import { getResolvedConfigPath } from "@/lib/instance-paths";
 import type {
   ExportInstanceZipInput,
   Instance,
-  LoaderType,
   UpdateInstanceInput,
 } from "@/lib/types";
 
@@ -40,6 +41,16 @@ type ImportProgressState =
   | { active: false; current: 0; total: 0; fileName: ""; error: null }
   | { active: true; current: number; total: number; fileName: string; error: null }
   | { active: true; current: number; total: number; fileName: string; error: string };
+
+const SHARED_INSTANCE_QUERY_KEYS = [["instances"], ["logs"]] as const;
+
+function resetCreateDraft(
+  setShowCreate: (value: boolean) => void,
+  setNewDir: (value: string) => void,
+) {
+  setShowCreate(false);
+  setNewDir("");
+}
 
 export function InstancesPage() {
   const queryClient = useQueryClient();
@@ -55,10 +66,7 @@ export function InstancesPage() {
   const [pendingDeleteInstance, setPendingDeleteInstance] = useState<Instance | null>(null);
   const [deleteInstanceName, setDeleteInstanceName] = useState("");
   const [deleteInstanceFiles, setDeleteInstanceFiles] = useState(false);
-  const [newName, setNewName] = useState("");
   const [newDir, setNewDir] = useState("");
-  const [newLoader, setNewLoader] = useState<LoaderType>("fabric");
-  const [newVersion, setNewVersion] = useState("");
   const [preload, setPreload] = useState<PreloadState>({
     status: "idle",
     step: "",
@@ -71,6 +79,11 @@ export function InstancesPage() {
     fileName: "",
     error: null,
   });
+  const exportInstanceId = pendingExportInstance?.id ?? null;
+  const { data: exportMods = [] } = useMods(exportInstanceId);
+  const { data: exportCategories = [] } = useCategories(exportInstanceId);
+  const resetCreateForm = () =>
+    resetCreateDraft(setShowCreate, setNewDir);
 
   const filtered = useMemo(
     () => filterInstances(instances, instanceSearch),
@@ -90,22 +103,16 @@ export function InstancesPage() {
   });
 
   const handleCreate = async () => {
-    const missingFields = [
-      !newName.trim() ? "Name" : null,
-      !newDir.trim() ? "Game Directory" : null,
-      !newVersion.trim() ? "Minecraft Version" : null,
-    ].filter(Boolean);
-
-    if (missingFields.length > 0) {
-      window.alert(`Please fill in the required fields: ${missingFields.join(", ")}`);
+    if (!newDir.trim()) {
+      window.alert("Please select a game directory.");
       return;
     }
 
     const instance = await createMutation.mutateAsync({
-      name: newName.trim(),
+      name: "",
       gameDir: newDir.trim(),
-      loader: newLoader,
-      mcVersion: newVersion.trim(),
+      loader: "unknown",
+      mcVersion: null,
     });
 
     const settings = await api.settings.get();
@@ -114,10 +121,7 @@ export function InstancesPage() {
     } else {
       setSelectedInstance(instance.id);
       queryClient.invalidateQueries({ queryKey: ["instances"] });
-      setShowCreate(false);
-      setNewName("");
-      setNewDir("");
-      setNewVersion("");
+      resetCreateForm();
     }
   };
 
@@ -162,12 +166,14 @@ export function InstancesPage() {
       }
 
       await Promise.allSettled([
+        ...SHARED_INSTANCE_QUERY_KEYS.map((queryKey) =>
+          queryClient.invalidateQueries({ queryKey })
+        ),
         queryClient.invalidateQueries({ queryKey: ["instances"] }),
         queryClient.invalidateQueries({ queryKey: ["mods", instance.id] }),
         queryClient.invalidateQueries({
           queryKey: ["mod-integrity-audit", instance.id],
         }),
-        queryClient.invalidateQueries({ queryKey: ["logs"] }),
         queryClient.invalidateQueries({
           queryKey: ["packs", instance.id, "resourcePack"],
         }),
@@ -206,10 +212,7 @@ export function InstancesPage() {
       }
 
       setPreload({ status: "idle", step: "", error: null });
-      setShowCreate(false);
-      setNewName("");
-      setNewDir("");
-      setNewVersion("");
+      resetCreateForm();
     } catch (error) {
       setPreload({
         status: "error",
@@ -252,12 +255,14 @@ export function InstancesPage() {
 
     await Promise.allSettled([
       queryClient.invalidateQueries({ queryKey: ["instances"] }),
+      ...SHARED_INSTANCE_QUERY_KEYS
+        .filter(([key]) => key !== "instances")
+        .map((queryKey) => queryClient.invalidateQueries({ queryKey })),
       queryClient.invalidateQueries({ queryKey: ["instance", instance.id] }),
       queryClient.invalidateQueries({ queryKey: ["mods", instance.id] }),
       queryClient.invalidateQueries({
         queryKey: ["mod-integrity-audit", instance.id],
       }),
-      queryClient.invalidateQueries({ queryKey: ["logs"] }),
       queryClient.invalidateQueries({
         queryKey: ["packs", instance.id, "resourcePack"],
       }),
@@ -470,16 +475,7 @@ export function InstancesPage() {
             <CardTitle>Create Instance</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label>Name *</Label>
-                <Input
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  placeholder="My Modpack"
-                  aria-required="true"
-                />
-              </div>
+            <div className="space-y-2">
               <div className="space-y-2">
                 <Label>Game Directory *</Label>
                 <div className="flex gap-2">
@@ -501,32 +497,9 @@ export function InstancesPage() {
                   </Button>
                 </div>
               </div>
-              <div className="space-y-2">
-                <Label>Loader</Label>
-                <select
-                  className="flex h-9 w-full rounded-md border border-[var(--color-input)] bg-[var(--color-muted)] px-3 text-sm"
-                  value={newLoader}
-                  onChange={(e) => setNewLoader(e.target.value as LoaderType)}
-                >
-                  <option value="vanilla">Vanilla</option>
-                  <option value="fabric">Fabric</option>
-                  <option value="forge">Forge</option>
-                  <option value="neoforge">NeoForge</option>
-                  <option value="quilt">Quilt</option>
-                </select>
-              </div>
-              <div className="space-y-2">
-                <Label>Minecraft Version *</Label>
-                <Input
-                  value={newVersion}
-                  onChange={(e) => setNewVersion(e.target.value)}
-                  placeholder="1.20.1"
-                  aria-required="true"
-                />
-              </div>
             </div>
             <p className="text-xs text-[var(--color-muted-foreground)]">
-              Fields marked with * are required.
+              Modly creates the instance, then reads this folder to detect its name, loader, and Minecraft version. You can edit any detected value afterward.
             </p>
             <div className="flex gap-2">
               <Button
@@ -577,7 +550,7 @@ export function InstancesPage() {
             {instances.length === 0 ? (
               <Button onClick={() => setShowCreate(true)}>
                 <Plus className="h-4 w-4" />
-                Create your first instance
+                Create instance
               </Button>
             ) : (
               <Button variant="outline" onClick={() => setInstanceSearch("")}>
@@ -635,7 +608,7 @@ export function InstancesPage() {
       >
         <div className="space-y-4">
           <p className="text-sm text-[var(--color-muted-foreground)]">
-            This removes the instance from the app. You can also choose to delete its files from disk.
+            This removes the instance from the app.
           </p>
           <div className="space-y-2">
             <Label htmlFor="delete-instance-name">Instance name</Label>
@@ -666,6 +639,8 @@ export function InstancesPage() {
       <ExportZipDialog
         instance={pendingExportInstance}
         open={pendingExportInstance !== null}
+        mods={exportMods}
+        categories={exportCategories}
         exporting={exportMutation.isPending}
         onOpenChange={(open) => !open && setPendingExportInstance(null)}
         onConfirm={handleExport}
@@ -729,15 +704,15 @@ function ImportProgressOverlay({
           </div>
           <div className="min-w-0 flex-1">
             <h2 id="import-progress-title" className="text-base font-semibold">
-              {loading ? "Importing ZIP" : "Import needs attention"}
+              {loading ? "Importing ZIP" : "Import failed"}
             </h2>
             <p
               id="import-progress-description"
               className="mt-2 text-sm text-[var(--color-muted-foreground)]"
             >
               {loading
-                ? "Importing the archive and applying Modly metadata. Keep the app open."
-                : "The ZIP import did not finish. Review the error below."}
+                ? "Importing archive..."
+                : "Import failed."}
             </p>
             <div className="mt-5 space-y-3">
               <Progress value={loading ? value : 100} />
@@ -799,7 +774,7 @@ function InstancePreloadOverlay({
           </div>
           <div className="min-w-0 flex-1">
             <h2 id="instance-preload-title" className="text-base font-semibold">
-              {loading ? "Pre-loading instance content" : "Pre-load needs attention"}
+              {loading ? "Loading instance" : "Load failed"}
             </h2>
             <p
               id="instance-preload-description"

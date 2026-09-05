@@ -12,9 +12,9 @@ use crate::models::category::{
 use crate::models::instance::{CreateInstanceInput, Instance, LoaderType, UpdateInstanceInput};
 use crate::models::launch::LaunchConfig;
 use crate::models::mod_metadata::{
-    ModFile, ModIntegrityAudit, ModIntegrityAuditStatus, ModIntegrityReport, ModMetadata,
+    BulkUpdateModMetadataInput, ModFile, ModIntegrityAudit, ModIntegrityAuditStatus, ModIntegrityReport, ModMetadata,
     ModRelationshipEdge, ModRelationshipGraph, ModRelationshipGraphNode, ModRelationshipType,
-    ModRelationshipsForMod, ModSide, ModSuggestion, UpdateModMetadataInput,
+    ModRelationshipsForMod, ModSuggestion, UpdateModMetadataInput,
     UpdateModRelationshipInput, UpsertModSuggestionInput,
 };
 use crate::models::pack_item::{PackItem, PackItemMetadata, PackType, UpdatePackItemMetadataInput};
@@ -281,6 +281,7 @@ impl Database {
                 "last_instance_id" => settings.last_instance_id = Some(value),
                 "modrinth_enabled" => settings.modrinth_enabled = value == "true",
                 "curseforge_enabled" => settings.curseforge_enabled = value == "true",
+                "launch_window_mode" => settings.launch_window_mode = value,
                 _ => {}
             }
         }
@@ -345,6 +346,7 @@ impl Database {
                 "curseforge_enabled",
                 settings.curseforge_enabled.to_string(),
             ),
+            ("launch_window_mode", settings.launch_window_mode.clone()),
         ];
         for (key, value) in pairs {
             conn.execute(
@@ -478,14 +480,29 @@ impl Database {
         let source = self
             .get_instance(id)?
             .ok_or_else(|| anyhow::anyhow!("Source instance not found"))?;
+        let target_path = std::path::Path::new(new_game_dir);
+        if target_path.exists() {
+            anyhow::bail!("Target instance directory already exists");
+        }
+        if source.game_dir == new_game_dir {
+            anyhow::bail!("Target instance directory must be different from the source");
+        }
         std::fs::create_dir_all(new_game_dir)?;
-        copy_dir_recursive(&source.game_dir, new_game_dir)?;
-        self.create_instance(CreateInstanceInput {
+        if let Err(error) = copy_dir_recursive(&source.game_dir, new_game_dir) {
+            let _ = std::fs::remove_dir_all(new_game_dir);
+            return Err(error);
+        }
+
+        let created = self.create_instance(CreateInstanceInput {
             name: new_name.to_string(),
             game_dir: new_game_dir.to_string(),
             loader: source.loader,
             mc_version: source.mc_version,
-        })
+        });
+        if created.is_err() {
+            let _ = std::fs::remove_dir_all(new_game_dir);
+        }
+        created
     }
 
     pub fn list_mods(&self, instance_id: &str) -> Result<Vec<ModFile>> {
@@ -679,6 +696,7 @@ impl Database {
             mod_id: input.mod_id_field.clone(),
             installed_modrinth_version_id: input.installed_modrinth_version_id.clone(),
             customized: true,
+            name_is_fallback: false,
         };
         let source_url = normalize_url(
             input
@@ -700,6 +718,67 @@ impl Database {
 
         self.get_mod_by_id(&input.mod_id)?
             .ok_or_else(|| anyhow::anyhow!("Mod not found after update"))
+    }
+
+    pub fn bulk_update_mod_metadata(&self, input: &BulkUpdateModMetadataInput) -> Result<Vec<ModFile>> {
+        if input.mod_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut existing_mods = Vec::with_capacity(input.mod_ids.len());
+        for mod_id in &input.mod_ids {
+            let mod_file = self
+                .get_mod_by_id(mod_id)?
+                .ok_or_else(|| anyhow::anyhow!("Mod not found: {mod_id}"))?;
+            if mod_file.instance_id != input.instance_id {
+                return Err(anyhow::anyhow!("All selected mods must belong to the same instance"));
+            }
+            existing_mods.push(mod_file);
+        }
+
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let tx = conn.unchecked_transaction()?;
+        for mod_file in &existing_mods {
+            let mut metadata = mod_file.metadata.clone().unwrap_or_else(|| ModMetadata {
+                name: mod_file.file_name.trim_end_matches(".jar").to_string(),
+                version: "?".to_string(),
+                authors: vec![],
+                modrinth_url: None,
+                dependencies: vec![],
+                loader: input.loader,
+                side: input.side,
+                mod_id: None,
+                installed_modrinth_version_id: None,
+                customized: true,
+                name_is_fallback: false,
+            });
+            metadata.loader = input.loader;
+            metadata.side = input.side;
+            metadata.customized = true;
+
+            tx.execute(
+                "UPDATE mods SET metadata_json = ?1 WHERE id = ?2",
+                params![serde_json::to_string(&metadata)?, mod_file.id],
+            )?;
+            tx.execute("DELETE FROM mod_category_tags WHERE mod_id = ?1", params![mod_file.id])?;
+            for category_id in &input.category_ids {
+                tx.execute(
+                    "INSERT OR IGNORE INTO mod_category_tags (mod_id, category_id) VALUES (?1, ?2)",
+                    params![mod_file.id, category_id],
+                )?;
+            }
+        }
+        tx.commit()?;
+        drop(conn);
+
+        input
+            .mod_ids
+            .iter()
+            .map(|mod_id| {
+                self.get_mod_by_id(mod_id)?
+                    .ok_or_else(|| anyhow::anyhow!("Mod not found after bulk update: {mod_id}"))
+            })
+            .collect()
     }
 
     pub fn get_mod_relationships(&self, mod_id: &str) -> Result<ModRelationshipsForMod> {
@@ -755,6 +834,7 @@ impl Database {
     }
 
     pub fn get_instance_relationship_graph(&self, instance_id: &str) -> Result<ModRelationshipGraph> {
+        let mods = self.list_mods(instance_id)?;
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
         let nodes = {
             let mut stmt = conn.prepare(
@@ -800,11 +880,71 @@ impl Database {
             let rows = stmt.query_map(params![instance_id], Self::row_to_mod_relationship_edge)?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
+        let node_by_mod_id = mods
+            .iter()
+            .filter_map(|mod_file| {
+                mod_file
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.mod_id.as_ref())
+                    .map(|mod_id| (mod_id.to_ascii_lowercase(), mod_file))
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let manual_dependency_sources = edges
+            .iter()
+            .filter(|edge| edge.relationship_type == ModRelationshipType::Dependency)
+            .map(|edge| edge.source_mod_id.clone())
+            .collect::<std::collections::HashSet<_>>();
+        let mut merged_edges = edges.clone();
+        let mut seen_pairs = edges
+            .iter()
+            .map(|edge| (edge.source_mod_id.clone(), edge.target_mod_id.clone()))
+            .collect::<std::collections::HashSet<_>>();
+
+        for source in &mods {
+            if manual_dependency_sources.contains(&source.id) {
+                continue;
+            }
+            let Some(metadata) = source.metadata.as_ref() else {
+                continue;
+            };
+            for dependency in &metadata.dependencies {
+                let target_key = dependency.mod_id.to_ascii_lowercase();
+                let Some(target) = node_by_mod_id.get(&target_key) else {
+                    continue;
+                };
+                if target.id == source.id {
+                    continue;
+                }
+                let pair = (source.id.clone(), target.id.clone());
+                if !seen_pairs.insert(pair.clone()) {
+                    continue;
+                }
+                merged_edges.push(ModRelationshipEdge {
+                    id: format!("detected:{}:{}", pair.0, pair.1),
+                    instance_id: instance_id.to_string(),
+                    source_mod_id: source.id.clone(),
+                    source_mod_name: source
+                        .metadata
+                        .as_ref()
+                        .map(|meta| meta.name.clone())
+                        .unwrap_or_else(|| source.file_name.clone()),
+                    target_mod_id: target.id.clone(),
+                    target_mod_name: target
+                        .metadata
+                        .as_ref()
+                        .map(|meta| meta.name.clone())
+                        .unwrap_or_else(|| target.file_name.clone()),
+                    relationship_type: ModRelationshipType::Dependency,
+                    created_at: "detected".to_string(),
+                });
+            }
+        }
 
         Ok(ModRelationshipGraph {
             instance_id: instance_id.to_string(),
             nodes,
-            edges,
+            edges: merged_edges,
         })
     }
 
@@ -963,10 +1103,11 @@ impl Database {
                 .cloned(),
             dependencies: vec![],
             loader: input.loader,
-            side: ModSide::Unknown,
+            side: input.side,
             mod_id: input.mod_id_field.clone(),
             installed_modrinth_version_id: None,
             customized: true,
+            name_is_fallback: false,
         };
         let file_name = if input.file_name.trim().is_empty() {
             metadata.name.clone()
@@ -1085,6 +1226,23 @@ impl Database {
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    pub fn get_category_by_id(&self, category_id: &str) -> Result<Option<InstanceCategory>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, instance_id, name FROM instance_categories WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query(params![category_id])?;
+        rows.next()?
+            .map(|row| {
+                Ok(InstanceCategory {
+                    id: row.get(0)?,
+                    instance_id: row.get(1)?,
+                    name: row.get(2)?,
+                })
+            })
+            .transpose()
     }
 
     pub fn create_category(&self, input: CreateCategoryInput) -> Result<InstanceCategory> {
@@ -1577,7 +1735,9 @@ mod tests {
     use super::*;
     use crate::models::category::{DeleteCategoryInput, DeleteCategoryMode};
     use crate::models::instance::{CreateInstanceInput, LoaderType};
-    use crate::models::mod_metadata::{ModRelationshipType, UpdateModRelationshipInput};
+    use crate::models::mod_metadata::{
+        ModDependency, ModRelationshipType, UpdateModRelationshipInput,
+    };
 
     fn test_db() -> Database {
         let dir = std::env::temp_dir().join(format!("modly-db-test-{}", Uuid::new_v4()));
@@ -1641,6 +1801,10 @@ mod tests {
             ],
         )
         .expect("mod should be inserted");
+    }
+
+    fn insert_mod_with_metadata(db: &Database, mod_file: &ModFile) {
+        db.upsert_mod(mod_file).expect("mod should upsert");
     }
 
     fn seed_relationship_fixture(db: &Database) -> (String, String, String, String, String) {
@@ -1919,5 +2083,128 @@ mod tests {
             .get_mod_relationships(&source_id)
             .expect("relationships should load");
         assert!(relationships.outgoing.is_empty());
+    }
+
+    #[test]
+    fn persists_launch_window_mode_in_settings() {
+        let db = test_db();
+        let mut settings = db.get_settings().expect("settings should load");
+        settings.launch_window_mode = "windowed".to_string();
+
+        db.save_settings(&settings).expect("settings should save");
+
+        let saved = db.get_settings().expect("settings should reload");
+        assert_eq!(saved.launch_window_mode, "windowed");
+    }
+
+    #[test]
+    fn duplicate_instance_rejects_existing_target_directory() {
+        let db = test_db();
+        let source = db
+            .create_instance(CreateInstanceInput {
+                name: "Source".to_string(),
+                game_dir: "C:\\duplicate-source".to_string(),
+                loader: LoaderType::Fabric,
+                mc_version: Some("1.20.1".to_string()),
+            })
+            .expect("instance should be created");
+
+        let existing_dir = std::env::temp_dir().join(format!("modly-copy-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&existing_dir).expect("existing target dir should be created");
+
+        let error = db
+            .duplicate_instance(
+                &source.id,
+                "Copy",
+                existing_dir.to_str().expect("temp path should be valid"),
+            )
+            .expect_err("existing target dir should be rejected");
+
+        assert!(error.to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn merges_detected_dependency_edges_into_relationship_graph() {
+        let db = test_db();
+        let instance = db
+            .create_instance(CreateInstanceInput {
+                name: "Detected".to_string(),
+                game_dir: "C:\\detected-instance".to_string(),
+                loader: LoaderType::NeoForge,
+                mc_version: Some("1.20.1".to_string()),
+            })
+            .expect("instance should be created");
+
+        insert_mod_with_metadata(
+            &db,
+            &ModFile {
+                id: "source".to_string(),
+                instance_id: instance.id.clone(),
+                file_name: "source.jar".to_string(),
+                file_path: "C:\\detected-instance\\mods\\source.jar".to_string(),
+                installed_at: "now".to_string(),
+                enabled: true,
+                hash_sha256: None,
+                source_url: None,
+                metadata: Some(ModMetadata {
+                    name: "Source".to_string(),
+                    version: "1.0.0".to_string(),
+                    authors: vec![],
+                    modrinth_url: None,
+                    dependencies: vec![ModDependency {
+                        mod_id: "targetmod".to_string(),
+                        version_range: Some("[1.0,)".to_string()),
+                        kind: "required".to_string(),
+                    }],
+                    loader: crate::models::mod_metadata::LoaderKind::NeoForge,
+                    side: ModSide::Unknown,
+                    mod_id: Some("sourcemod".to_string()),
+                    installed_modrinth_version_id: None,
+                    customized: false,
+                    name_is_fallback: false,
+                }),
+                categories: vec![],
+                related_mods: vec![],
+            },
+        );
+
+        insert_mod_with_metadata(
+            &db,
+            &ModFile {
+                id: "target".to_string(),
+                instance_id: instance.id.clone(),
+                file_name: "target.jar".to_string(),
+                file_path: "C:\\detected-instance\\mods\\target.jar".to_string(),
+                installed_at: "now".to_string(),
+                enabled: true,
+                hash_sha256: None,
+                source_url: None,
+                metadata: Some(ModMetadata {
+                    name: "Target".to_string(),
+                    version: "1.0.0".to_string(),
+                    authors: vec![],
+                    modrinth_url: None,
+                    dependencies: vec![],
+                    loader: crate::models::mod_metadata::LoaderKind::NeoForge,
+                    side: ModSide::Unknown,
+                    mod_id: Some("targetmod".to_string()),
+                    installed_modrinth_version_id: None,
+                    customized: false,
+                    name_is_fallback: false,
+                }),
+                categories: vec![],
+                related_mods: vec![],
+            },
+        );
+
+        let graph = db
+            .get_instance_relationship_graph(&instance.id)
+            .expect("graph should load");
+
+        assert!(graph.edges.iter().any(|edge| {
+            edge.source_mod_id == "source"
+                && edge.target_mod_id == "target"
+                && edge.relationship_type == ModRelationshipType::Dependency
+        }));
     }
 }
