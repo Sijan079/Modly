@@ -12,6 +12,7 @@ dist
 dist-ssr
 *.local
 src-tauri/target*
+.modly-dev-app-data/
 
 # Editor directories and files
 .vscode/*

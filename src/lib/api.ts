@@ -36,10 +36,30 @@ import type {
   UpdateTarget,
   SuggestionVersionOption,
   InstallSuggestionFromModrinthInput,
+  ModrinthProjectDetails,
   ModrinthProjectSummary,
+  ScoutAnalysis,
+  ScoutTarget,
+  CandidateSearchResult,
 } from "./types";
 
 export const api = {
+  scout: {
+    listTargets: () => invoke<ScoutTarget[]>("list_scout_targets"),
+    createTarget: (path: string, name?: string | null) =>
+      invoke<ScoutTarget>("create_scout_target", { input: { path, name: name ?? null } }),
+    createInstanceTarget: (instanceId: string) =>
+      invoke<ScoutTarget>("create_scout_instance_target", { instanceId }),
+    analyze: (targetId: string) => invoke<ScoutAnalysis>("analyze_scout_target", { targetId }),
+    latestAnalysis: (targetId: string) =>
+      invoke<ScoutAnalysis | null>("get_latest_scout_analysis", { targetId }),
+    recommendations: (targetId: string) =>
+      invoke<CandidateSearchResult | null>("get_scout_recommendations", { targetId }),
+    discoverCandidates: (targetId: string) =>
+      invoke<CandidateSearchResult>("discover_scout_candidates", { targetId }),
+    searchCandidates: (targetId: string, query: string) =>
+      invoke<CandidateSearchResult>("search_scout_candidates", { targetId, query }),
+  },
   scan: {
     defaultMinecraft: () =>
       invoke<MinecraftScanResult>("scan_default_minecraft"),
@@ -151,6 +171,8 @@ export const api = {
       }),
     modrinthProjects: (projectIds: string[]) =>
       invoke<ModrinthProjectSummary[]>("get_modrinth_projects", { projectIds }),
+    modrinthProjectDetails: (projectId: string) =>
+      invoke<ModrinthProjectDetails>("get_modrinth_project_details", { projectId }),
     installSuggestion: (input: InstallSuggestionFromModrinthInput) =>
       invoke<ModFile>("install_suggestion_from_modrinth", { input }),
     log: (instanceId: string, level: string, message: string) =>

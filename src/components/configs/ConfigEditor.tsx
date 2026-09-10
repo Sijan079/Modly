@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import Editor from "@monaco-editor/react";
 import { Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 
 interface ConfigEditorProps {
@@ -83,8 +84,10 @@ export function ConfigEditor({ filePath }: ConfigEditorProps) {
         </Button>
       </div>
       {loading ? (
-        <div className="flex flex-1 items-center justify-center text-sm text-[var(--color-muted-foreground)]">
-          Loading file...
+        <div aria-busy="true" aria-label="Loading file" className="flex flex-1 flex-col gap-3 p-4">
+          {Array.from({ length: 14 }, (_, index) => (
+            <Skeleton key={index} className={`h-4 ${index % 4 === 3 ? "w-2/5" : "w-full"}`} />
+          ))}
         </div>
       ) : (
         <Editor

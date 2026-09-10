@@ -55,6 +55,7 @@
 - Track manual mod relationships visually as dependency and add-on links without needing to preselect a mod first.
 - Click any mod in the graph to edit its outgoing relationships in a lightweight table modal with add, save, and bulk-delete flows.
 - Save mod ideas as suggestions, preview their source pages, and turn them into installed mods when you're ready.
+- Use Modpack Scout to read installed JAR metadata from a managed instance or a selected local folder without changing the pack.
 - Check for compatible updates and install them with less guesswork.
 - Catch broken or missing mod files before they ruin a play session.
 - Manage DSR packs across resource packs, shader packs, and datapacks for each instance.
@@ -69,3 +70,20 @@ Grab the latest `.msi` from the [GitHub Releases](../../releases) page, run it, 
 ## Local Data
 
 Modly keeps its settings and managed details on your device. Your Minecraft files stay in the instance folders you choose.
+
+## Modpack Scout
+
+Modpack Scout is a read-only Modly module for inspecting a modpack and finding additions that fit it. Choose an existing Modly instance or browse to a Minecraft root (or its `mods` directory), then select **Analyze Pack**.
+
+The initial scanner reads `META-INF/neoforge.mods.toml`, `META-INF/mods.toml`, `fabric.mod.json`, and legacy `mcmod.info` files inside mod JARs. It records installed mod IDs, names, versions, loaders, and declared dependencies in Modly's local SQLite database. Malformed JARs are reported without stopping the scan.
+
+Scout never writes to the selected pack's `mods`, `config`, `saves`, or `worlds` folders. Its recommendation search uses Modrinth's official API and requires a feature or theme query. Results are restricted to the detected Minecraft version and loader, exclude obvious installed matches, and are cached locally for six hours. Scout ranks them with an explainable score for theme fit, search-goal fit, installed ecosystem references, maintenance, category overlap, and basic performance risk. Candidate dependency and conflict checks are not implemented yet and are shown as unevaluated rather than inferred.
+
+## Development
+
+Run the desktop app locally with:
+
+```bash
+npm install
+npm run tauri dev
+```

@@ -4,5 +4,6 @@ pub mod launch;
 pub mod mod_metadata;
 pub mod pack_item;
 pub mod scan;
+pub mod scout;
 pub mod settings;
 pub mod updates;

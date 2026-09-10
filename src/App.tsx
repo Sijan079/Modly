@@ -1,18 +1,22 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import { AppLayout } from "@/components/layout/AppLayout";
-import { DashboardPage } from "@/pages/Dashboard";
-import { InstancesPage } from "@/pages/Instances";
-import { ModsPage } from "@/pages/Mods";
-import { RelationshipsPage } from "@/pages/Dependencies";
-import { ModSuggestionsPage } from "@/pages/ModSuggestions";
-import { ResourcePacksPage } from "@/pages/ResourcePacks";
-import { UpdatesPage } from "@/pages/Updates";
-import { SettingsPage } from "@/pages/Settings";
-import ConfigsPage from "@/pages/ConfigsPage";
-import { LogsPage } from "@/pages/Logs";
+import { ModuleErrorBoundary } from "@/components/layout/ModuleErrorBoundary";
+import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
+
+const DashboardPage = lazy(() => import("@/pages/Dashboard").then(({ DashboardPage }) => ({ default: DashboardPage })));
+const InstancesPage = lazy(() => import("@/pages/Instances").then(({ InstancesPage }) => ({ default: InstancesPage })));
+const ModsPage = lazy(() => import("@/pages/Mods").then(({ ModsPage }) => ({ default: ModsPage })));
+const RelationshipsPage = lazy(() => import("@/pages/Dependencies").then(({ RelationshipsPage }) => ({ default: RelationshipsPage })));
+const ModSuggestionsPage = lazy(() => import("@/pages/ModSuggestions").then(({ ModSuggestionsPage }) => ({ default: ModSuggestionsPage })));
+const ResourcePacksPage = lazy(() => import("@/pages/ResourcePacks").then(({ ResourcePacksPage }) => ({ default: ResourcePacksPage })));
+const UpdatesPage = lazy(() => import("@/pages/Updates").then(({ UpdatesPage }) => ({ default: UpdatesPage })));
+const SettingsPage = lazy(() => import("@/pages/Settings").then(({ SettingsPage }) => ({ default: SettingsPage })));
+const ConfigsPage = lazy(() => import("@/pages/ConfigsPage"));
+const LogsPage = lazy(() => import("@/pages/Logs").then(({ LogsPage }) => ({ default: LogsPage })));
+const ScoutPage = lazy(() => import("@/pages/Scout").then(({ ScoutPage }) => ({ default: ScoutPage })));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -30,16 +34,17 @@ export default function App() {
         <BrowserRouter>
           <Routes>
             <Route element={<AppLayout />}>
-              <Route path="/" element={<DashboardPage />} />
-              <Route path="/instances" element={<InstancesPage />} />
-              <Route path="/mods" element={<ModsPage />} />
-              <Route path="/dependencies" element={<RelationshipsPage />} />
-              <Route path="/mod-suggestions" element={<ModSuggestionsPage />} />
-              <Route path="/resource-packs" element={<ResourcePacksPage />} />
-              <Route path="/updates" element={<UpdatesPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
-              <Route path="/logs" element={<LogsPage />} />
-              <Route path="/configs" element={<ConfigsPage />} />
+              <Route path="/" element={<ModuleRoute name="Dashboard"><DashboardPage /></ModuleRoute>} />
+              <Route path="/instances" element={<ModuleRoute name="Instances"><InstancesPage /></ModuleRoute>} />
+              <Route path="/mods" element={<ModuleRoute name="Mods"><ModsPage /></ModuleRoute>} />
+              <Route path="/dependencies" element={<ModuleRoute name="Relationships"><RelationshipsPage /></ModuleRoute>} />
+              <Route path="/mod-suggestions" element={<ModuleRoute name="Mod Suggestions"><ModSuggestionsPage /></ModuleRoute>} />
+              <Route path="/scout" element={<ModuleRoute name="Modpack Scout"><ScoutPage /></ModuleRoute>} />
+              <Route path="/resource-packs" element={<ModuleRoute name="Resource Packs"><ResourcePacksPage /></ModuleRoute>} />
+              <Route path="/updates" element={<ModuleRoute name="Updates"><UpdatesPage /></ModuleRoute>} />
+              <Route path="/settings" element={<ModuleRoute name="Settings"><SettingsPage /></ModuleRoute>} />
+              <Route path="/logs" element={<ModuleRoute name="Logs"><LogsPage /></ModuleRoute>} />
+              <Route path="/configs" element={<ModuleRoute name="Configs"><ConfigsPage /></ModuleRoute>} />
             </Route>
           </Routes>
         </BrowserRouter>
@@ -48,7 +53,25 @@ export default function App() {
   );
 }
 
-function StartupGate({ children }: { children: React.ReactNode }) {
+function ModuleRoute({ name, children }: { name: string; children: ReactNode }) {
+  return (
+    <ModuleErrorBoundary moduleName={name}>
+      <Suspense fallback={<ModuleLoadingFallback name={name} />}>{children}</Suspense>
+    </ModuleErrorBoundary>
+  );
+}
+
+function ModuleLoadingFallback({ name }: { name: string }) {
+  return (
+    <div aria-busy="true" aria-label={`Loading ${name}`} className="space-y-5">
+      <div className="space-y-2"><Skeleton className="h-8 w-36" /><Skeleton className="h-4 w-56" /></div>
+      <Skeleton className="h-12 w-full" />
+      <Skeleton className="h-96 w-full" />
+    </div>
+  );
+}
+
+function StartupGate({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {

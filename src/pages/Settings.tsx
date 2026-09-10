@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 import { PageShell } from "@/components/layout/PageShell";
 import { useSettings, useSaveSettings } from "@/hooks/useSettings";
 import { api } from "@/lib/api";
@@ -50,7 +51,7 @@ export function SettingsPage() {
   };
 
   if (isLoading || !form) {
-    return <p className="text-[var(--color-muted-foreground)]">Loading settings...</p>;
+    return <SettingsSkeleton />;
   }
 
   return (
@@ -224,6 +225,19 @@ export function SettingsPage() {
           <Save className="h-4 w-4" />
           {saveMutation.isPending ? "Saving..." : "Save Settings"}
         </Button>
+      </div>
+    </div>
+  );
+}
+
+function SettingsSkeleton() {
+  return (
+    <div aria-busy="true" aria-label="Loading settings" className="space-y-5">
+      <div className="space-y-2"><Skeleton className="h-8 w-32" /><Skeleton className="h-4 w-24" /></div>
+      <div className="grid gap-5 xl:grid-cols-2">
+        {Array.from({ length: 4 }, (_, index) => (
+          <Card key={index}><CardHeader><Skeleton className="h-5 w-40" /><Skeleton className="h-3 w-24" /></CardHeader><CardContent className="space-y-4"><Skeleton className="h-9 w-full" /><Skeleton className="h-9 w-full" /><Skeleton className="h-9 w-2/3" /></CardContent></Card>
+        ))}
       </div>
     </div>
   );

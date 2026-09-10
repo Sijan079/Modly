@@ -414,6 +414,93 @@ export interface ModrinthProjectSummary {
   loaders: string[];
 }
 
+export interface ModrinthProjectDetails {
+  project: ModrinthProjectSummary;
+  authors: string[];
+}
+
+export type ScoutModClassification = "gameplay" | "library" | "unknown";
+
+export interface ScoutTarget {
+  id: string;
+  name: string;
+  modsPath: string;
+  instanceId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ScoutParseFailure {
+  fileName: string;
+  message: string;
+}
+
+export interface ScoutInstalledMod {
+  fileName: string;
+  filePath: string;
+  metadata: ModMetadata;
+  classification: ScoutModClassification;
+  hashSha512: string;
+  providerMetadata: ScoutProviderMetadata | null;
+}
+
+export interface ScoutProviderMetadata {
+  provider: string;
+  projectId: string;
+  slug: string;
+  title: string;
+  categories: string[];
+  projectUrl: string;
+}
+
+export interface ScoutAnalysis {
+  id: string;
+  targetId: string;
+  minecraftVersion: string | null;
+  loader: ModLoaderKind;
+  scannedAt: string;
+  totalJars: number;
+  parsedMods: number;
+  failedMods: number;
+  mods: ScoutInstalledMod[];
+  failures: ScoutParseFailure[];
+  providerCacheHits: number;
+  providerFetches: number;
+  providerWarning: string | null;
+}
+
+export interface CandidateMod {
+  projectId: string;
+  slug: string;
+  title: string;
+  description: string;
+  author: string;
+  categories: string[];
+  supportedVersions: string[];
+  downloads: number;
+  iconUrl: string | null;
+  dateModified: string;
+  projectUrl: string;
+}
+
+export interface CandidateSearchResult {
+  query: string;
+  minecraftVersion: string;
+  loader: ModLoaderKind;
+  fetchedAt: string;
+  fromCache: boolean;
+  recommendations: Recommendation[];
+}
+
+export type RecommendationStatus = "ADD" | "CONSIDER" | "SKIP";
+
+export interface Recommendation {
+  candidate: CandidateMod;
+  score: number;
+  status: RecommendationStatus;
+  concerns: string[];
+}
+
 export interface InstallSuggestionFromModrinthInput {
   suggestionId: string;
   versionId: string;

@@ -13,6 +13,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ThemedSelect } from "@/components/ui/themed-select";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
   DialogContent,
@@ -438,6 +439,8 @@ export function RelationshipsPage() {
               onChange={setSearch}
               placeholder="Search mods in graph..."
               className="sm:max-w-xs"
+              activityLabel="relationships"
+              activityContext={selectedInstance?.name}
             />
             <ThemedSelect
               className="min-w-[11rem]"
@@ -467,11 +470,7 @@ export function RelationshipsPage() {
           </CardContent>
         </Card>
       ) : isRescanning ? null : graphLoading ? (
-        <Card>
-          <CardContent className="flex h-[36rem] items-center justify-center text-[var(--color-muted-foreground)]">
-            Loading relationship graph...
-          </CardContent>
-        </Card>
+        <RelationshipGraphSkeleton />
       ) : !graph || graph.edges.length === 0 ? (
         <EmptyGraphState
           mods={mods}
@@ -536,6 +535,23 @@ export function RelationshipsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+function RelationshipGraphSkeleton() {
+  return (
+    <Card aria-busy="true" aria-label="Loading relationship graph">
+      <CardContent className="relative h-[36rem] overflow-hidden p-6">
+        <Skeleton className="absolute left-[12%] top-[18%] h-14 w-32" />
+        <Skeleton className="absolute left-[42%] top-[11%] h-14 w-36" />
+        <Skeleton className="absolute right-[12%] top-[28%] h-14 w-28" />
+        <Skeleton className="absolute bottom-[18%] left-[30%] h-14 w-36" />
+        <Skeleton className="absolute bottom-[14%] right-[28%] h-14 w-32" />
+        <Skeleton className="absolute left-[31%] top-[31%] h-px w-[18%] rounded-none" />
+        <Skeleton className="absolute right-[24%] top-[34%] h-px w-[18%] rounded-none" />
+        <Skeleton className="absolute bottom-[30%] left-[40%] h-px w-[15%] rounded-none" />
+      </CardContent>
+    </Card>
   );
 }
 

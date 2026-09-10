@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import { PlatformLinkButton } from "@/components/ui/platform-link-button";
 import { Progress } from "@/components/ui/progress";
+import { TableSkeleton } from "@/components/ui/skeleton";
 import { useInstances } from "@/hooks/useInstances";
 import {
   useConfirmUpdateMatch,
@@ -82,6 +83,7 @@ export function UpdatesPage() {
     label: "",
   });
   const [runError, setRunError] = useState<string | null>(null);
+  const [loadingSavedCheck, setLoadingSavedCheck] = useState(true);
 
   const filteredRows = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -121,7 +123,11 @@ export function UpdatesPage() {
     setLastCheckedAt(null);
     setChecked(false);
     setSelectedIds(new Set());
-    if (!instanceId) return;
+    setLoadingSavedCheck(true);
+    if (!instanceId) {
+      setLoadingSavedCheck(false);
+      return;
+    }
 
     api.updates
       .latest(instanceId)
@@ -135,6 +141,9 @@ export function UpdatesPage() {
         if (mounted) {
           setRunError(error instanceof Error ? error.message : String(error));
         }
+      })
+      .finally(() => {
+        if (mounted) setLoadingSavedCheck(false);
       });
 
     return () => {
@@ -366,6 +375,8 @@ export function UpdatesPage() {
             value={search}
             onChange={setSearch}
             placeholder="Search updates by file, version, source..."
+            activityLabel="updates"
+            activityContext={selectedInstance?.name}
           />
         }
         filters={
@@ -387,6 +398,7 @@ export function UpdatesPage() {
 
       <UpdatesTable
         rows={filteredRows}
+        loading={loadingSavedCheck}
         checked={checked}
         selectedIds={selectedIds}
         busy={checkProgress.active || updateProgress.active}
@@ -428,6 +440,7 @@ export function UpdatesPage() {
 
 function UpdatesTable({
   rows,
+  loading,
   checked,
   selectedIds,
   busy,
@@ -436,6 +449,7 @@ function UpdatesTable({
   onOpenDetails,
 }: {
   rows: UpdateRow[];
+  loading: boolean;
   checked: boolean;
   selectedIds: Set<string>;
   busy: boolean;
@@ -443,6 +457,10 @@ function UpdatesTable({
   onConfirm: (row: UpdateRow, candidate: UpdateCandidate) => void;
   onOpenDetails: (row: UpdateRow) => void;
 }) {
+  if (loading) {
+    return <TableSkeleton columns={5} />;
+  }
+
   if (rows.length === 0) {
     return (
       <div className="flex h-52 flex-col items-center justify-center gap-2 rounded-lg border border-[var(--color-border)] text-[var(--color-muted-foreground)]">

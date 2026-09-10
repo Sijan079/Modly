@@ -24,7 +24,11 @@ pub async fn create_category(input: CreateCategoryInput) -> Result<InstanceCateg
             .map(|instance| instance.name);
         state
             .db
-            .append_log("info", &format!("Created category: {}", category.name), instance_name.as_deref())
+            .append_log(
+                "info",
+                &format!("Created category: {}", category.name),
+                instance_name.as_deref(),
+            )
             .map_err(|e| e.to_string())?;
         Ok(category)
     })
@@ -49,7 +53,11 @@ pub async fn delete_category(input: DeleteCategoryInput) -> Result<(), String> {
                 .map(|instance| instance.name);
             state
                 .db
-                .append_log("info", &format!("Deleted category: {}", category.name), instance_name.as_deref())
+                .append_log(
+                    "info",
+                    &format!("Deleted category: {}", category.name),
+                    instance_name.as_deref(),
+                )
                 .map_err(|e| e.to_string())?;
         }
         Ok(())

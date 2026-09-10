@@ -187,7 +187,9 @@ mod tests {
     fn resolves_custom_datapack_and_config_paths() {
         let instance = instance();
         assert_eq!(
-            instance.resolved_pack_path(PackType::Datapack).to_string_lossy(),
+            instance
+                .resolved_pack_path(PackType::Datapack)
+                .to_string_lossy(),
             "D:\\custom\\datapacks"
         );
         assert_eq!(

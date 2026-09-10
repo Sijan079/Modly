@@ -245,7 +245,9 @@ fn detect_loaders(root: &Path) -> Vec<DetectedLoader> {
 
 fn find_minecraft_version_in_versions_dir(root: &Path) -> Option<String> {
     let entries = std::fs::read_dir(root.join("versions")).ok()?;
-    entries.flatten().find_map(|entry| extract_minecraft_version(&entry.file_name().to_string_lossy()))
+    entries
+        .flatten()
+        .find_map(|entry| extract_minecraft_version(&entry.file_name().to_string_lossy()))
 }
 
 fn extract_minecraft_version(value: &str) -> Option<String> {
@@ -262,9 +264,9 @@ fn extract_minecraft_version(value: &str) -> Option<String> {
         let candidate = chars[start..end].iter().collect::<String>();
         let parts = candidate.split('.').collect::<Vec<_>>();
         if (2..=3).contains(&parts.len())
-            && parts
-                .iter()
-                .all(|part| !part.is_empty() && part.chars().all(|character| character.is_ascii_digit()))
+            && parts.iter().all(|part| {
+                !part.is_empty() && part.chars().all(|character| character.is_ascii_digit())
+            })
         {
             return Some(candidate);
         }
@@ -306,8 +308,11 @@ mod tests {
     fn infers_metadata_from_mod_filename_and_folder_name() {
         let root = std::env::temp_dir().join(format!("My NeoForge Pack-{}", Uuid::new_v4()));
         fs::create_dir_all(root.join("mods")).expect("mods directory should exist");
-        fs::write(root.join("mods").join("example-neoforge-1.21.1-1.0.0.jar"), b"jar")
-            .expect("mod file should exist");
+        fs::write(
+            root.join("mods").join("example-neoforge-1.21.1-1.0.0.jar"),
+            b"jar",
+        )
+        .expect("mod file should exist");
 
         let guess = infer_instance_metadata(&root);
 

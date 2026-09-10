@@ -20,12 +20,14 @@ import { Label } from "@/components/ui/label";
 import { PageShell } from "@/components/layout/PageShell";
 import { PageSearchBar } from "@/components/layout/PageSearchBar";
 import { PageToolbar } from "@/components/layout/PageToolbar";
+import { Skeleton, TableSkeleton } from "@/components/ui/skeleton";
 import { ModFilters } from "@/components/mods/ModFilters";
 import { useCategories } from "@/hooks/useCategories";
 import { useInstances } from "@/hooks/useInstances";
 import {
   useDeleteModSuggestion,
   useInstallSuggestion,
+  useModrinthProjectDetails,
   useModrinthProjects,
   useMods,
   useModSuggestions,
@@ -65,6 +67,7 @@ const emptyDraft = {
   loader: "unknown" as ModLoaderKind,
   side: "unknown" as ModSide,
   sourceUrl: "",
+  authors: [] as string[],
   filePath: "",
   enabled: true,
   categoryIds: [] as string[],
@@ -121,12 +124,22 @@ export function ModSuggestionsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState(emptyDraft);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [manualMetadataOpen, setManualMetadataOpen] = useState(false);
+  const [importedSourceUrl, setImportedSourceUrl] = useState<string | null>(null);
   const [pendingDeleteSuggestion, setPendingDeleteSuggestion] =
     useState<ModSuggestion | null>(null);
   const [installState, setInstallState] = useState<InstallState>(() =>
     createInstallState(selectedInstance)
   );
   const [toast, setToast] = useState<ToastState>(null);
+  const draftSource = parseModSourceUrl(draft.sourceUrl);
+  const draftProjectId =
+    editorOpen && draftSource?.platform === "modrinth" ? draftSource.project : null;
+  const {
+    data: editorProjectDetails = null,
+    isLoading: editorProjectLoading,
+    error: editorProjectError,
+  } = useModrinthProjectDetails(draftProjectId);
 
   const selectedSuggestion =
     suggestions.find((suggestion) => suggestion.id === selectedId) ?? null;
@@ -160,6 +173,18 @@ export function ModSuggestionsPage() {
     const timer = window.setTimeout(() => setToast(null), 2600);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    if (!editorProjectDetails || !draftSource?.url || importedSourceUrl === draftSource.url) return;
+
+    setDraft((current) => ({
+      ...current,
+      name: editorProjectDetails.project.title,
+      loader: preferredProjectLoader(editorProjectDetails.project.loaders, selectedInstance?.loader),
+      authors: editorProjectDetails.authors,
+    }));
+    setImportedSourceUrl(draftSource.url);
+  }, [draftSource?.url, editorProjectDetails, importedSourceUrl, selectedInstance?.loader]);
 
   const showToast = (message: string) => {
     setToast({ id: Date.now(), message });
@@ -308,15 +333,20 @@ export function ModSuggestionsPage() {
       loader: suggestion.metadata?.loader ?? "unknown",
       side: suggestion.metadata?.side ?? "unknown",
       sourceUrl: suggestion.sourceUrl ?? "",
+      authors: suggestion.metadata?.authors ?? [],
       filePath: suggestion.filePath ?? "",
       enabled: suggestion.enabled,
       categoryIds: suggestion.categories.map((category) => category.id),
     });
+    setManualMetadataOpen(true);
+    setImportedSourceUrl(parseModSourceUrl(suggestion.sourceUrl)?.url ?? null);
     setEditorOpen(true);
   };
 
   const resetDraft = () => {
     setDraft(emptyDraft);
+    setManualMetadataOpen(false);
+    setImportedSourceUrl(null);
   };
 
   const clearSearchAndFilters = () => {
@@ -357,7 +387,7 @@ export function ModSuggestionsPage() {
         sourceUrl: normalizedUrl || null,
         name,
         version: draft.version.trim() || "?",
-        authors: [],
+        authors: draft.authors,
         loader: draft.loader,
         side: draft.side,
         modIdField: null,
@@ -404,8 +434,11 @@ export function ModSuggestionsPage() {
     }));
   };
 
-  const draftSource = parseModSourceUrl(draft.sourceUrl);
   const isCurseForgeDraft = draftSource?.platform === "curseforge";
+  const isModrinthDraft = draftSource?.platform === "modrinth";
+  const showManualMetadata =
+    !isModrinthDraft || manualMetadataOpen || editorProjectError !== null;
+  const selectedSourceUrl = normalizeSourceUrl(selectedSuggestion?.sourceUrl);
 
   return (
     <div className="flex flex-col gap-5">
@@ -435,6 +468,8 @@ export function ModSuggestionsPage() {
             value={search}
             onChange={setSearch}
             placeholder="Search suggestions by name, loader, category, source..."
+            activityLabel="mod suggestions"
+            activityContext={selectedInstance?.name}
           />
         }
         filters={
@@ -452,7 +487,7 @@ export function ModSuggestionsPage() {
 
       <div
         className={`grid gap-5 transition-[grid-template-columns] duration-300 ease-out ${
-          preview && selectedSuggestion
+          selectedSourceUrl && selectedSuggestion
             ? "xl:grid-cols-[minmax(0,1fr)_460px]"
             : "xl:grid-cols-[minmax(0,1fr)]"
         }`}
@@ -492,7 +527,7 @@ export function ModSuggestionsPage() {
           />
         </div>
 
-        {preview && selectedSuggestion && (
+        {selectedSourceUrl && selectedSuggestion && (
           <Card className="h-[calc(100vh-13rem)] min-h-[520px] overflow-hidden">
             <CardContent className="flex h-full flex-col gap-4 p-4">
               <div className="flex items-start justify-between gap-3">
@@ -501,8 +536,8 @@ export function ModSuggestionsPage() {
                   <h3 className="mt-1 text-lg font-semibold">{selectedSuggestion.metadata?.name}</h3>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Badge variant={preview.platform === "modrinth" ? "default" : "secondary"}>
-                    {preview.label}
+                  <Badge variant={preview?.platform === "modrinth" ? "default" : "secondary"}>
+                    {preview?.label ?? "Source link"}
                   </Badge>
                   <Button
                     variant="ghost"
@@ -516,18 +551,22 @@ export function ModSuggestionsPage() {
                 </div>
               </div>
               <div className="min-h-0 flex-1 overflow-auto rounded-md border border-[var(--color-border)] bg-[var(--color-background)]">
-                <SourcePreviewContent
-                  preview={preview}
-                  project={previewProject}
-                  loading={previewProjectLoading}
-                  error={
-                    previewProjectError instanceof Error
-                      ? previewProjectError.message
-                      : null
-                  }
-                />
+                {preview ? (
+                  <SourcePreviewContent
+                    preview={preview}
+                    project={previewProject}
+                    loading={previewProjectLoading}
+                    error={
+                      previewProjectError instanceof Error
+                        ? previewProjectError.message
+                        : null
+                    }
+                  />
+                ) : (
+                  <GenericSourcePreview url={selectedSourceUrl} />
+                )}
               </div>
-              <Button variant="outline" onClick={() => openUrl(preview.url)}>
+              <Button variant="outline" onClick={() => openUrl(selectedSourceUrl)}>
                 <ExternalLink className="h-4 w-4" />
                 Open in browser
               </Button>
@@ -559,29 +598,7 @@ export function ModSuggestionsPage() {
           </DialogHeader>
 
           <div className="grid gap-4 py-2">
-            <Field label="Display name">
-              <Input
-                value={draft.name}
-                onChange={(event) =>
-                  setDraft((current) => ({ ...current, name: event.target.value }))
-                }
-                placeholder="Sodium"
-              />
-            </Field>
-            <Field label="Loader">
-              <ThemedSelect
-                className="w-full"
-                value={draft.loader}
-                onValueChange={(value) =>
-                  setDraft((current) => ({
-                    ...current,
-                    loader: value as ModLoaderKind,
-                  }))
-                }
-                options={LOADERS.map((value) => ({ value, label: formatLoader(value) }))}
-              />
-            </Field>
-            <Field label="Source URL">
+            <Field label="Mod page URL">
               <Input
                 value={draft.sourceUrl}
                 onChange={(event) =>
@@ -589,14 +606,48 @@ export function ModSuggestionsPage() {
                 }
                 placeholder="https://modrinth.com/mod/... or https://curseforge.com/minecraft/mc-mods/..."
               />
+              <p className="text-xs text-[var(--color-muted-foreground)]">
+                Paste a Modrinth or CurseForge mod page. Modrinth details are imported automatically.
+              </p>
             </Field>
-            {isCurseForgeDraft && (
-              <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-sm text-amber-100">
-                CurseForge links are saved as a source only. Fill in the details below manually; Modly will not fetch metadata from CurseForge.
-              </div>
+            {isModrinthDraft && (
+              <ModrinthMetadataPanel
+                details={editorProjectDetails}
+                loading={editorProjectLoading}
+                error={editorProjectError instanceof Error ? editorProjectError.message : null}
+                manualOpen={manualMetadataOpen}
+                onEditDetails={() => setManualMetadataOpen((open) => !open)}
+              />
             )}
             {isCurseForgeDraft && (
+              <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-sm text-amber-100">
+                CurseForge links are saved as a source only. Enter the mod details below manually.
+              </div>
+            )}
+            {showManualMetadata && (
               <div className="grid gap-4 rounded-md border border-[var(--color-border)] bg-[var(--color-muted)]/25 p-3 sm:grid-cols-2">
+                <Field label="Display name">
+                  <Input
+                    value={draft.name}
+                    onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
+                    placeholder="Sodium"
+                  />
+                </Field>
+                <Field label="Loader">
+                  <ThemedSelect
+                    className="w-full"
+                    value={draft.loader}
+                    onValueChange={(value) => setDraft((current) => ({ ...current, loader: value as ModLoaderKind }))}
+                    options={LOADERS.map((value) => ({ value, label: formatLoader(value) }))}
+                  />
+                </Field>
+                <Field label="Authors">
+                  <Input
+                    value={draft.authors.join(", ")}
+                    onChange={(event) => setDraft((current) => ({ ...current, authors: event.target.value.split(",").map((author) => author.trim()).filter(Boolean) }))}
+                    placeholder="Author name"
+                  />
+                </Field>
                 <Field label="Version">
                   <Input
                     value={draft.version}
@@ -612,9 +663,6 @@ export function ModSuggestionsPage() {
                     options={SIDES.map((value) => ({ value, label: value === "unknown" ? "Unknown" : value === "client" ? "Client" : value === "server" ? "Server" : "Both" }))}
                   />
                 </Field>
-                <p className="sm:col-span-2 text-xs text-[var(--color-muted-foreground)]">
-                  Name, loader, categories, and optional downloaded file remain editable above and below this section.
-                </p>
               </div>
             )}
             <Field label="Downloaded file (optional)">
@@ -670,7 +718,7 @@ export function ModSuggestionsPage() {
             </Button>
             <Button
               onClick={saveDraft}
-              disabled={!instanceId || !draft.name.trim() || upsertSuggestion.isPending}
+              disabled={!instanceId || !draft.name.trim() || editorProjectLoading || upsertSuggestion.isPending}
             >
               <Save className="h-4 w-4" />
               Save
@@ -809,11 +857,76 @@ export function ModSuggestionsPage() {
   );
 }
 
+function ModrinthMetadataPanel({
+  details,
+  loading,
+  error,
+  manualOpen,
+  onEditDetails,
+}: {
+  details: { project: ModrinthProjectSummary; authors: string[] } | null;
+  loading: boolean;
+  error: string | null;
+  manualOpen: boolean;
+  onEditDetails: () => void;
+}) {
+  if (loading) {
+    return (
+      <div className="space-y-3 rounded-md border border-[var(--color-border)] bg-[var(--color-muted)]/25 p-3">
+        <Skeleton className="h-4 w-36" />
+        <Skeleton className="h-4 w-3/4" />
+        <Skeleton className="h-4 w-1/2" />
+      </div>
+    );
+  }
+
+  if (!details) {
+    return (
+      <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2.5 text-sm text-amber-100">
+        {error ?? "Modrinth details could not be loaded. You can enter the details manually."}
+      </div>
+    );
+  }
+
+  const authors = details.authors.length > 0 ? details.authors.join(", ") : "No author data listed";
+  const loaders = details.project.loaders.length > 0
+    ? details.project.loaders.map((loader) => formatLoader(loader as ModLoaderKind)).join(", ")
+    : "No loader data listed";
+
+  return (
+    <div className="rounded-md border border-[var(--color-primary)]/30 bg-[var(--color-primary)]/5 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium">Metadata imported from Modrinth</p>
+          <p className="mt-1 text-xs text-[var(--color-muted-foreground)]">{details.project.title}</p>
+        </div>
+        <Button type="button" size="sm" variant="ghost" onClick={onEditDetails}>
+          {manualOpen ? "Hide details" : "Edit details"}
+        </Button>
+      </div>
+      <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+        <div><dt className="text-[var(--color-muted-foreground)]">Authors</dt><dd className="mt-0.5 text-[var(--color-foreground)]">{authors}</dd></div>
+        <div><dt className="text-[var(--color-muted-foreground)]">Loaders</dt><dd className="mt-0.5 text-[var(--color-foreground)]">{loaders}</dd></div>
+      </dl>
+    </div>
+  );
+}
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="space-y-2">
       <Label>{label}</Label>
       {children}
+    </div>
+  );
+}
+
+function GenericSourcePreview({ url }: { url: string }) {
+  return (
+    <div className="flex h-full flex-col justify-center gap-3 p-5 text-sm text-[var(--color-muted-foreground)]">
+      <p className="font-medium text-[var(--color-foreground)]">Source link available</p>
+      <p>This link is not a recognized Modrinth or CurseForge mod page, but you can still open it in your browser.</p>
+      <p className="break-all text-xs">{url}</p>
     </div>
   );
 }
@@ -857,8 +970,12 @@ function ModrinthPreview({
 }) {
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-[var(--color-muted-foreground)]">
-        Loading Modrinth preview...
+      <div aria-busy="true" aria-label="Loading Modrinth preview" className="space-y-5 p-5">
+        <div className="flex items-start gap-4"><Skeleton className="h-16 w-16 shrink-0" /><div className="flex-1 space-y-3"><Skeleton className="h-5 w-2/3" /><Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-4/5" /></div></div>
+        <Skeleton className="h-24 w-full" />
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-11/12" />
+        <Skeleton className="h-4 w-4/5" />
       </div>
     );
   }
@@ -968,11 +1085,7 @@ function SuggestionTable({
   onDelete: (suggestion: ModSuggestion) => void;
 }) {
   if (loading) {
-    return (
-      <div className="flex h-48 items-center justify-center text-[var(--color-muted-foreground)]">
-        Loading suggestions...
-      </div>
-    );
+    return <TableSkeleton columns={5} />;
   }
 
   if (suggestions.length === 0) {
@@ -1226,4 +1339,20 @@ function normalizeMatchText(value: string | null | undefined): string {
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function preferredProjectLoader(
+  loaders: string[],
+  instanceLoader: string | null | undefined
+): ModLoaderKind {
+  const supported = loaders
+    .map((loader) => loader.toLowerCase())
+    .filter((loader): loader is ModLoaderKind => LOADERS.includes(loader as ModLoaderKind));
+  const preferred = instanceLoader?.toLowerCase() as ModLoaderKind | undefined;
+
+  if (preferred && preferred !== "unknown" && supported.includes(preferred)) {
+    return preferred;
+  }
+
+  return supported[0] ?? "unknown";
 }

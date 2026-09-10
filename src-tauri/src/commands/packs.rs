@@ -52,7 +52,12 @@ pub async fn scan_pack_items(
             .db
             .append_log(
                 "info",
-                &format!("Scanned {} {} item{}", pack_type_label(pack_type), items.len(), if items.len() == 1 { "" } else { "s" }),
+                &format!(
+                    "Scanned {} {} item{}",
+                    pack_type_label(pack_type),
+                    items.len(),
+                    if items.len() == 1 { "" } else { "s" }
+                ),
                 Some(&instance.name),
             )
             .map_err(|e| e.to_string())?;
@@ -92,7 +97,16 @@ pub async fn toggle_pack_item_enabled(item_id: String, enabled: bool) -> Result<
             .map(|instance| instance.name);
         state
             .db
-            .append_log("info", &format!("{} {}: {}", if enabled { "Enabled" } else { "Disabled" }, pack_type_label(item.pack_type), item.file_name), instance_name.as_deref())
+            .append_log(
+                "info",
+                &format!(
+                    "{} {}: {}",
+                    if enabled { "Enabled" } else { "Disabled" },
+                    pack_type_label(item.pack_type),
+                    item.file_name
+                ),
+                instance_name.as_deref(),
+            )
             .map_err(|e| e.to_string())
     })
 }
@@ -113,7 +127,15 @@ pub async fn update_pack_item_metadata(
             .map(|instance| instance.name);
         state
             .db
-            .append_log("info", &format!("Updated {} metadata: {}", pack_type_label(updated.pack_type), updated.file_name), instance_name.as_deref())
+            .append_log(
+                "info",
+                &format!(
+                    "Updated {} metadata: {}",
+                    pack_type_label(updated.pack_type),
+                    updated.file_name
+                ),
+                instance_name.as_deref(),
+            )
             .map_err(|e| e.to_string())?;
         Ok(updated)
     })

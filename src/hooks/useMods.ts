@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type {
   ModrinthProjectSummary,
+  ModrinthProjectDetails,
   ModRelationshipGraph,
   ModRelationshipsForMod,
   UpdateModMetadataInput,
@@ -143,6 +144,15 @@ export function useModrinthProjects(projectIds: string[]) {
     queryKey: ["modrinth-projects", normalizedIds],
     queryFn: () => api.updates.modrinthProjects(normalizedIds),
     enabled: normalizedIds.length > 0,
+    staleTime: 1000 * 60 * 30,
+  });
+}
+
+export function useModrinthProjectDetails(projectId: string | null) {
+  return useQuery<ModrinthProjectDetails | null>({
+    queryKey: ["modrinth-project-details", projectId],
+    queryFn: () => (projectId ? api.updates.modrinthProjectDetails(projectId) : null),
+    enabled: !!projectId,
     staleTime: 1000 * 60 * 30,
   });
 }

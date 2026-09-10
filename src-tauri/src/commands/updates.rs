@@ -7,8 +7,8 @@ use uuid::Uuid;
 use crate::models::mod_metadata::{ModFile, UpdateModMetadataInput};
 use crate::models::updates::{
     CheckUpdateTargetInput, ConfirmUpdateMatchInput, InstallSuggestionFromModrinthInput,
-    ModrinthProjectSummary, SavedUpdateCheck, SuggestionVersionOption, UpdateItemType,
-    UpdateModFromModrinthInput, UpdateRow, UpdateTarget,
+    ModrinthProjectDetails, ModrinthProjectSummary, SavedUpdateCheck, SuggestionVersionOption,
+    UpdateItemType, UpdateModFromModrinthInput, UpdateRow, UpdateTarget,
 };
 use crate::services::hash_service::hash_file;
 use crate::services::mod_parser::parse_mod_jar;
@@ -334,7 +334,9 @@ pub async fn list_suggestion_modrinth_versions(
 }
 
 #[command]
-pub async fn get_modrinth_projects(project_ids: Vec<String>) -> Result<Vec<ModrinthProjectSummary>, String> {
+pub async fn get_modrinth_projects(
+    project_ids: Vec<String>,
+) -> Result<Vec<ModrinthProjectSummary>, String> {
     let mut ids = project_ids
         .into_iter()
         .map(|id| id.trim().to_string())
@@ -345,6 +347,21 @@ pub async fn get_modrinth_projects(project_ids: Vec<String>) -> Result<Vec<Modri
 
     UpdateService::default()
         .get_projects(&ids)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn get_modrinth_project_details(
+    project_id: String,
+) -> Result<ModrinthProjectDetails, String> {
+    let project_id = project_id.trim();
+    if project_id.is_empty() {
+        return Err("A Modrinth project ID is required.".to_string());
+    }
+
+    UpdateService::default()
+        .get_project_details(project_id)
         .await
         .map_err(|e| e.to_string())
 }
@@ -383,13 +400,17 @@ pub async fn install_suggestion_from_modrinth(
         std::fs::write(&temp, &bytes).map_err(|e| e.to_string())?;
         std::fs::rename(&temp, &dest).map_err(|e| e.to_string())?;
 
-        let metadata = suggestion.metadata.clone().or_else(|| parse_mod_jar(&dest).ok());
+        let metadata = suggestion
+            .metadata
+            .clone()
+            .or_else(|| parse_mod_jar(&dest).ok());
         let mod_file = ModFile {
             id: Uuid::new_v4().to_string(),
             instance_id: suggestion.instance_id.clone(),
             file_name: safe_file_name,
             file_path: dest.to_string_lossy().to_string(),
-            installed_at: file_installed_at(&dest).unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+            installed_at: file_installed_at(&dest)
+                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
             enabled: true,
             hash_sha256: hash_file(&dest).ok(),
             source_url: suggestion.source_url.clone(),

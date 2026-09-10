@@ -131,6 +131,13 @@ pub struct ModrinthProjectSummary {
     pub loaders: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModrinthProjectDetails {
+    pub project: ModrinthProjectSummary,
+    pub authors: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallSuggestionFromModrinthInput {

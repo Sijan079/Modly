@@ -8,6 +8,7 @@ import { PackEditDialog } from "@/components/mods/PackEditDialog";
 import { Button } from "@/components/ui/button";
 import { ThemedSelect } from "@/components/ui/themed-select";
 import { PlatformLinkButton } from "@/components/ui/platform-link-button";
+import { TableSkeleton } from "@/components/ui/skeleton";
 import { useInstances } from "@/hooks/useInstances";
 import {
   usePacks,
@@ -144,6 +145,8 @@ export function ResourcePacksPage() {
             value={search}
             onChange={setSearch}
             placeholder={`Search ${listTitle.toLowerCase()} by name, author, file...`}
+            activityLabel={listTitle.toLowerCase()}
+            activityContext={selectedInstance?.name}
           />
         }
         filters={
@@ -157,7 +160,7 @@ export function ResourcePacksPage() {
         rows={filteredRows}
         packTypeFilter={packTypeFilter}
         instanceId={instanceId}
-        loading={isFetching && !resolvedPackPath}
+        loading={isFetching && listRows.length === 0}
         onSelectType={setPackTypeFilter}
         onEditItem={setEditingItem}
         emptyMessage={emptyMessage}
@@ -298,11 +301,7 @@ function PackTable({
   emptyMessage: string;
 }) {
   if (loading) {
-    return (
-      <div className="flex h-48 items-center justify-center text-[var(--color-muted-foreground)]">
-        Loading packs...
-      </div>
-    );
+    return <TableSkeleton columns={5} />;
   }
 
   if (rows.length === 0) {

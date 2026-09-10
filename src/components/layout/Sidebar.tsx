@@ -8,6 +8,7 @@ import {
   Network,
   Package,
   RefreshCw,
+  ScanSearch,
   Settings,
   TerminalSquare,
 } from "lucide-react";
@@ -27,6 +28,7 @@ const navGroups = [
       { to: "/mods", icon: Package, label: "Mods" },
       { to: "/dependencies", icon: Network, label: "Relationships" },
       { to: "/mod-suggestions", icon: Lightbulb, label: "Suggestions" },
+      { to: "/scout", icon: ScanSearch, label: "Modpack Scout" },
       { to: "/resource-packs", icon: Image, label: "DSR Packs" },
       { to: "/updates", icon: RefreshCw, label: "Updates" },
     ],

@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { PageShell } from "@/components/layout/PageShell";
 import { api } from "@/lib/api";
 import { formatDate } from "@/lib/utils";
@@ -36,7 +37,7 @@ export function LogsPage() {
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)]">
         <ScrollArea className="h-[calc(100vh-220px)]">
           {isLoading ? (
-            <p className="p-4 text-[var(--color-muted-foreground)]">Loading logs...</p>
+            <LogSkeleton />
           ) : weeklyLogs.length === 0 ? (
             <p className="p-4 text-[var(--color-muted-foreground)]">
               No activity in the last 7 days
@@ -61,6 +62,16 @@ export function LogsPage() {
           )}
         </ScrollArea>
       </div>
+    </div>
+  );
+}
+
+function LogSkeleton() {
+  return (
+    <div aria-busy="true" aria-label="Loading logs" className="divide-y divide-[var(--color-border)] p-1">
+      {Array.from({ length: 12 }, (_, index) => (
+        <div key={index} className="flex gap-3 px-3 py-3"><Skeleton className="h-3 w-28 shrink-0" /><Skeleton className="h-5 w-12 shrink-0" /><Skeleton className="h-3 flex-1" /></div>
+      ))}
     </div>
   );
 }

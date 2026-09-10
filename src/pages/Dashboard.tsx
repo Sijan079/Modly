@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { ThemedSelect } from "@/components/ui/themed-select";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { Skeleton } from "@/components/ui/skeleton";
 import { ExportZipDialog } from "@/components/instances/ExportZipDialog";
 import { PageShell } from "@/components/layout/PageShell";
 import { useCategories } from "@/hooks/useCategories";
@@ -46,33 +47,33 @@ import type {
 export function DashboardPage() {
   const queryClient = useQueryClient();
   const { selectedInstanceId, setSelectedInstance } = useAppStore();
-  const { data: instances = [] } = useInstances();
+  const { data: instances = [], isLoading: instancesLoading } = useInstances();
   const selectedInstance =
     instances.find((instance) => instance.id === selectedInstanceId) ??
     instances[0] ??
     null;
 
   const instanceId = selectedInstance?.id ?? null;
-  const { data: mods = [] } = useMods(instanceId);
-  const { data: categories = [] } = useCategories(instanceId);
+  const { data: mods = [], isLoading: modsLoading } = useMods(instanceId);
+  const { data: categories = [], isLoading: categoriesLoading } = useCategories(instanceId);
   const { data: latestIntegrityAudit = null } = useLatestModIntegrityAudit(instanceId);
-  const { data: resourcePacks = [] } = usePacks(instanceId, "resourcePack");
-  const { data: shaderPacks = [] } = usePacks(instanceId, "shaderPack");
-  const { data: datapacks = [] } = usePacks(instanceId, "datapack");
+  const { data: resourcePacks = [], isLoading: resourcePacksLoading } = usePacks(instanceId, "resourcePack");
+  const { data: shaderPacks = [], isLoading: shaderPacksLoading } = usePacks(instanceId, "shaderPack");
+  const { data: datapacks = [], isLoading: datapacksLoading } = usePacks(instanceId, "datapack");
   const integrityMutation = useCheckModIntegrity();
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const resolvedConfigPath = selectedInstance
     ? getResolvedConfigPath(selectedInstance)
     : null;
 
-  const { data: scanSummary, isFetching: checkingFolders } = useQuery({
+  const { data: scanSummary, isFetching: checkingFolders, isLoading: scanSummaryLoading } = useQuery({
     queryKey: ["dashboard-scan-summary", selectedInstance?.gameDir],
     queryFn: () => api.scan.path(selectedInstance!.gameDir),
     enabled: !!selectedInstance,
     staleTime: 60_000,
   });
 
-  const { data: configTree = [] } = useQuery({
+  const { data: configTree = [], isLoading: configTreeLoading } = useQuery({
     queryKey: ["dashboard-config-tree", resolvedConfigPath],
     queryFn: () => api.configs.scanTree(resolvedConfigPath!),
     enabled: !!resolvedConfigPath,
@@ -145,6 +146,15 @@ export function DashboardPage() {
   });
 
   const recentActivity = useMemo(() => logs.slice(0, 10), [logs]);
+  const dashboardLoading =
+    !!selectedInstance &&
+    (modsLoading ||
+      categoriesLoading ||
+      resourcePacksLoading ||
+      shaderPacksLoading ||
+      datapacksLoading ||
+      scanSummaryLoading ||
+      configTreeLoading);
   const planningStats = useMemo(
     () =>
       getPlanningStats(
@@ -180,8 +190,12 @@ export function DashboardPage() {
         description="Overview and export"
       />
 
-      {!selectedInstance ? (
+      {instancesLoading ? (
+        <DashboardSkeleton />
+      ) : !selectedInstance ? (
         <EmptyDashboard />
+      ) : dashboardLoading ? (
+        <DashboardSkeleton />
       ) : (
         <>
           <Card>
@@ -365,6 +379,15 @@ export function DashboardPage() {
           />
         </>
       )}
+    </div>
+  );
+}
+
+function DashboardSkeleton() {
+  return (
+    <div aria-busy="true" aria-label="Loading dashboard" className="space-y-5">
+      <Card><CardContent className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_18rem]"><div className="space-y-4"><div className="flex gap-3"><Skeleton className="h-8 w-52" /><Skeleton className="h-8 w-28" /></div><Skeleton className="h-4 w-3/4" /><div className="grid gap-3 sm:grid-cols-3"><Skeleton className="h-24" /><Skeleton className="h-24" /><Skeleton className="h-24" /></div></div><Skeleton className="h-40" /></CardContent></Card>
+      <div className="grid gap-5 lg:grid-cols-2"><Skeleton className="h-64" /><Skeleton className="h-64" /></div>
     </div>
   );
 }

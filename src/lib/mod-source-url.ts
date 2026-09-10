@@ -36,7 +36,11 @@ export function parseModSourceUrl(input: string | null | undefined): ModSourcePr
   const host = url.hostname.replace(/^www\./, "").toLowerCase();
   const segments = url.pathname.split("/").filter(Boolean);
 
-  if (host === "modrinth.com" && segments[0] === "mod" && segments[1]) {
+  if (
+    host === "modrinth.com" &&
+    ["mod", "plugin", "datapack", "resourcepack", "shader", "modpack", "project"].includes(segments[0]) &&
+    segments[1]
+  ) {
     return {
       platform: "modrinth",
       label: "Modrinth",

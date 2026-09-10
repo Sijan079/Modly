@@ -7,6 +7,7 @@ import { ThemedSelect } from "@/components/ui/themed-select";
 import { ConfigEditor } from "@/components/configs/ConfigEditor";
 import { ConfigTree } from "@/components/configs/ConfigTree";
 import { FileTabs } from "@/components/configs/FileTabs";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useInstances } from "@/hooks/useInstances";
 import { api } from "@/lib/api";
 import { getResolvedConfigPath } from "@/lib/instance-paths";
@@ -16,6 +17,7 @@ import { useConfigsStore } from "@/store/configsStore";
 
 export default function ConfigsPage() {
   const [configSearch, setConfigSearch] = useState("");
+  const [isScanningConfigs, setIsScanningConfigs] = useState(true);
   const { data: instances = [] } = useInstances();
   const { selectedInstanceId, setSelectedInstance } = useAppStore();
   const {
@@ -42,13 +44,20 @@ export default function ConfigsPage() {
     : null;
 
   const scanConfigs = async () => {
-    if (!resolvedConfigPath) return;
+    setIsScanningConfigs(true);
+    if (!resolvedConfigPath) {
+      setConfigTree([]);
+      setIsScanningConfigs(false);
+      return;
+    }
     try {
       const tree = await api.configs.scanTree(resolvedConfigPath);
       setConfigTree(tree);
     } catch (e) {
       console.error(e);
       setConfigTree([]);
+    } finally {
+      setIsScanningConfigs(false);
     }
   };
 
@@ -96,14 +105,11 @@ export default function ConfigsPage() {
               onChange={setConfigSearch}
               placeholder="Search config files..."
               className="mt-3 sm:max-w-none"
+              activityLabel="config files"
+              activityContext={selectedInstance?.name}
             />
           </div>
-          <ConfigTree
-            nodes={filteredConfigTree}
-            activePath={activeTabPath}
-            onOpenFile={openFile}
-            searchActive={configSearch.trim().length > 0}
-          />
+          {isScanningConfigs ? <ConfigTreeSkeleton /> : <ConfigTree nodes={filteredConfigTree} activePath={activeTabPath} onOpenFile={openFile} searchActive={configSearch.trim().length > 0} />}
         </aside>
 
         <main className="flex min-h-0 flex-col overflow-hidden">
@@ -122,6 +128,14 @@ export default function ConfigsPage() {
           )}
         </main>
       </div>
+    </div>
+  );
+}
+
+function ConfigTreeSkeleton() {
+  return (
+    <div aria-busy="true" aria-label="Loading config files" className="space-y-3 p-4">
+      {Array.from({ length: 10 }, (_, index) => <Skeleton key={index} className={`h-4 ${index % 3 === 0 ? "w-3/5" : "w-full"}`} />)}
     </div>
   );
 }

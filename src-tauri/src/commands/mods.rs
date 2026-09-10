@@ -9,9 +9,9 @@ use uuid::Uuid;
 use zip::ZipArchive;
 
 use crate::models::mod_metadata::{
-    BulkUpdateModMetadataInput, ModFile, ModIntegrityAudit, ModIntegrityAuditStatus, ModIntegrityReport, ModIntegrityStatus,
-    ModRelationshipGraph, ModRelationshipsForMod, ModSuggestion, UpdateModMetadataInput,
-    UpsertModSuggestionInput,
+    BulkUpdateModMetadataInput, ModFile, ModIntegrityAudit, ModIntegrityAuditStatus,
+    ModIntegrityReport, ModIntegrityStatus, ModRelationshipGraph, ModRelationshipsForMod,
+    ModSuggestion, UpdateModMetadataInput, UpsertModSuggestionInput,
 };
 use crate::services::hash_service::hash_file;
 use crate::services::mod_parser::{fallback_metadata, parse_mod_jar};
@@ -60,7 +60,8 @@ pub async fn scan_instance_mods(instance_id: String) -> Result<Vec<ModFile>, Str
             } else {
                 // A malformed embedded manifest should not leave the row without metadata.
                 // The filename fallback is marked for exact Modrinth hash enrichment below.
-                let parsed = Some(parse_mod_jar(&jar_path).unwrap_or_else(|_| fallback_metadata(&jar_path)));
+                let parsed =
+                    Some(parse_mod_jar(&jar_path).unwrap_or_else(|_| fallback_metadata(&jar_path)));
                 match (&parsed, existing.as_ref().and_then(|m| m.metadata.as_ref())) {
                     // Keep a previous exact Modrinth enrichment rather than looking it up on
                     // every scan when the JAR itself still lacks a display name.
@@ -163,7 +164,11 @@ pub async fn scan_instance_mods(instance_id: String) -> Result<Vec<ModFile>, Str
             .db
             .append_log(
                 "info",
-                &format!("Scanned mods: {} mod{} found", results.len(), if results.len() == 1 { "" } else { "s" }),
+                &format!(
+                    "Scanned mods: {} mod{} found",
+                    results.len(),
+                    if results.len() == 1 { "" } else { "s" }
+                ),
                 Some(&instance.name),
             )
             .map_err(|e| e.to_string())
@@ -406,7 +411,15 @@ pub async fn toggle_mod_enabled(
             .map(|instance| instance.name);
         state
             .db
-            .append_log("info", &format!("{} mod: {}", if enabled { "Enabled" } else { "Disabled" }, mod_display_name(&mod_file)), instance_name.as_deref())
+            .append_log(
+                "info",
+                &format!(
+                    "{} mod: {}",
+                    if enabled { "Enabled" } else { "Disabled" },
+                    mod_display_name(&mod_file)
+                ),
+                instance_name.as_deref(),
+            )
             .map_err(|e| e.to_string())
     })
 }
@@ -433,7 +446,11 @@ pub async fn delete_mod(mod_id: String) -> Result<(), String> {
             .map(|instance| instance.name);
         state
             .db
-            .append_log("info", &format!("Removed mod: {}", mod_display_name(&mod_file)), instance_name.as_deref())
+            .append_log(
+                "info",
+                &format!("Removed mod: {}", mod_display_name(&mod_file)),
+                instance_name.as_deref(),
+            )
             .map_err(|e| e.to_string())
     })
 }
@@ -450,10 +467,22 @@ pub async fn update_mod_metadata(input: UpdateModMetadataInput) -> Result<ModFil
             .get_instance(&updated.instance_id)
             .map_err(|e| e.to_string())?
             .map(|instance| instance.name);
-        let relationship_detail = if input.related_mods.is_empty() { "" } else { " and relationships" };
+        let relationship_detail = if input.related_mods.is_empty() {
+            ""
+        } else {
+            " and relationships"
+        };
         state
             .db
-            .append_log("info", &format!("Updated mod metadata{}: {}", relationship_detail, mod_display_name(&updated)), instance_name.as_deref())
+            .append_log(
+                "info",
+                &format!(
+                    "Updated mod metadata{}: {}",
+                    relationship_detail,
+                    mod_display_name(&updated)
+                ),
+                instance_name.as_deref(),
+            )
             .map_err(|e| e.to_string())?;
         Ok(updated)
     })
@@ -475,7 +504,15 @@ pub async fn bulk_update_mod_metadata(
             .map(|instance| instance.name);
         state
             .db
-            .append_log("info", &format!("Bulk updated metadata for {} mod{}", updated.len(), if updated.len() == 1 { "" } else { "s" }), instance_name.as_deref())
+            .append_log(
+                "info",
+                &format!(
+                    "Bulk updated metadata for {} mod{}",
+                    updated.len(),
+                    if updated.len() == 1 { "" } else { "s" }
+                ),
+                instance_name.as_deref(),
+            )
             .map_err(|e| e.to_string())?;
         Ok(updated)
     })
@@ -534,7 +571,11 @@ pub async fn reset_mod_metadata(mod_id: String) -> Result<ModFile, String> {
             .map(|instance| instance.name);
         state
             .db
-            .append_log("info", &format!("Reset mod metadata: {}", mod_display_name(&saved)), instance_name.as_deref())
+            .append_log(
+                "info",
+                &format!("Reset mod metadata: {}", mod_display_name(&saved)),
+                instance_name.as_deref(),
+            )
             .map_err(|e| e.to_string())?;
         Ok(saved)
     })
@@ -568,7 +609,8 @@ pub async fn copy_mod_to_instance(
             instance_id: target_instance_id,
             file_name: file_name.to_string_lossy().to_string(),
             file_path: dest.to_string_lossy().to_string(),
-            installed_at: file_installed_at(&dest).unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+            installed_at: file_installed_at(&dest)
+                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
             enabled: true,
             hash_sha256,
             source_url: None,
@@ -580,7 +622,11 @@ pub async fn copy_mod_to_instance(
         state.db.upsert_mod(&mod_file).map_err(|e| e.to_string())?;
         state
             .db
-            .append_log("info", &format!("Added mod: {}", mod_display_name(&mod_file)), Some(&instance.name))
+            .append_log(
+                "info",
+                &format!("Added mod: {}", mod_display_name(&mod_file)),
+                Some(&instance.name),
+            )
             .map_err(|e| e.to_string())?;
         Ok(mod_file)
     })
@@ -617,14 +663,18 @@ pub async fn promote_mod_suggestion(suggestion_id: String) -> Result<ModFile, St
         std::fs::create_dir_all(dest.parent().unwrap()).map_err(|e| e.to_string())?;
         std::fs::copy(source, &dest).map_err(|e| e.to_string())?;
 
-        let metadata = suggestion.metadata.clone().or_else(|| parse_mod_jar(&dest).ok());
+        let metadata = suggestion
+            .metadata
+            .clone()
+            .or_else(|| parse_mod_jar(&dest).ok());
         let hash_sha256 = hash_file(&dest).ok();
         let mod_file = ModFile {
             id: Uuid::new_v4().to_string(),
             instance_id: suggestion.instance_id.clone(),
             file_name: file_name.to_string_lossy().to_string(),
             file_path: dest.to_string_lossy().to_string(),
-            installed_at: file_installed_at(&dest).unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+            installed_at: file_installed_at(&dest)
+                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
             enabled: true,
             hash_sha256,
             source_url: suggestion.source_url.clone(),
@@ -645,7 +695,11 @@ pub async fn promote_mod_suggestion(suggestion_id: String) -> Result<ModFile, St
             .map_err(|e| e.to_string())?;
         state
             .db
-            .append_log("info", &format!("Promoted suggestion to mod: {}", mod_display_name(&saved)), Some(&instance.name))
+            .append_log(
+                "info",
+                &format!("Promoted suggestion to mod: {}", mod_display_name(&saved)),
+                Some(&instance.name),
+            )
             .map_err(|e| e.to_string())?;
         Ok(saved)
     })
@@ -693,7 +747,18 @@ pub async fn upsert_mod_suggestion(
             .map(|instance| instance.name);
         state
             .db
-            .append_log("info", &format!("Saved mod suggestion: {}", suggestion.metadata.as_ref().map(|metadata| metadata.name.as_str()).unwrap_or(&suggestion.file_name)), instance_name.as_deref())
+            .append_log(
+                "info",
+                &format!(
+                    "Saved mod suggestion: {}",
+                    suggestion
+                        .metadata
+                        .as_ref()
+                        .map(|metadata| metadata.name.as_str())
+                        .unwrap_or(&suggestion.file_name)
+                ),
+                instance_name.as_deref(),
+            )
             .map_err(|e| e.to_string())?;
         Ok(suggestion)
     })
@@ -716,10 +781,18 @@ pub async fn delete_mod_suggestion(id: String) -> Result<(), String> {
                 .get_instance(&suggestion.instance_id)
                 .map_err(|e| e.to_string())?
                 .map(|instance| instance.name);
-            let name = suggestion.metadata.as_ref().map(|metadata| metadata.name.as_str()).unwrap_or(&suggestion.file_name);
+            let name = suggestion
+                .metadata
+                .as_ref()
+                .map(|metadata| metadata.name.as_str())
+                .unwrap_or(&suggestion.file_name);
             state
                 .db
-                .append_log("info", &format!("Deleted mod suggestion: {name}"), instance_name.as_deref())
+                .append_log(
+                    "info",
+                    &format!("Deleted mod suggestion: {name}"),
+                    instance_name.as_deref(),
+                )
                 .map_err(|e| e.to_string())?;
         }
         Ok(())

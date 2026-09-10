@@ -10,5 +10,12 @@ pub async fn get_settings() -> Result<AppSettings, String> {
 
 #[command]
 pub async fn save_settings(settings: AppSettings) -> Result<(), String> {
-    with_state(|state| state.db.save_settings(&settings).map_err(|e| e.to_string()))
+    with_state(|state| {
+        state
+            .db
+            .save_settings(&settings)
+            .map_err(|e| e.to_string())?;
+        let _ = state.db.append_log("info", "Updated app settings", None);
+        Ok(())
+    })
 }

@@ -63,6 +63,23 @@ fn is_placeholder_name(value: &str) -> bool {
     value.trim().is_empty() || value.trim().eq_ignore_ascii_case("unknown mod")
 }
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum FabricPerson {
+    Name(String),
+    Details { name: Option<String> },
+}
+
+impl FabricPerson {
+    fn into_name(self) -> Option<String> {
+        match self {
+            FabricPerson::Name(name) => Some(name),
+            FabricPerson::Details { name } => name,
+        }
+        .filter(|name| !name.trim().is_empty())
+    }
+}
+
 fn try_parse_fabric(archive: &mut ZipArchive<std::fs::File>) -> Result<Option<ModMetadata>> {
     let mut fabric_json = String::new();
     if read_zip_entry(archive, "fabric.mod.json", &mut fabric_json).is_err() {
@@ -80,17 +97,12 @@ fn try_parse_fabric(archive: &mut ZipArchive<std::fs::File>) -> Result<Option<Mo
         suggests: Option<serde_json::Value>,
     }
 
-    #[derive(Deserialize)]
-    struct FabricPerson {
-        name: Option<String>,
-    }
-
     let parsed: FabricMod = serde_json::from_str(&fabric_json)?;
     let authors: Vec<String> = parsed
         .authors
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|a| a.name)
+        .filter_map(FabricPerson::into_name)
         .collect();
 
     let dependencies = extract_fabric_deps(parsed.depends, "depends")
@@ -440,7 +452,8 @@ fn split_camel_case(word: &str) -> String {
         let previous = index.checked_sub(1).and_then(|i| characters.get(i));
         let next = characters.get(index + 1);
         let starts_new_word = character.is_uppercase()
-            && previous.is_some_and(|previous| previous.is_lowercase() || previous.is_ascii_digit())
+            && previous
+                .is_some_and(|previous| previous.is_lowercase() || previous.is_ascii_digit())
             || character.is_uppercase()
                 && previous.is_some_and(|previous| previous.is_uppercase())
                 && next.is_some_and(|next| next.is_lowercase());
@@ -457,7 +470,7 @@ fn split_camel_case(word: &str) -> String {
 mod tests {
     use std::path::Path;
 
-    use super::{finalize_metadata, parse_mods_toml, split_name_and_version};
+    use super::{finalize_metadata, parse_mods_toml, split_name_and_version, FabricPerson};
     use crate::models::mod_metadata::{LoaderKind, ModMetadata, ModSide};
 
     #[test]
@@ -480,6 +493,20 @@ mod tests {
         );
 
         assert_eq!(metadata.name, "Example Mod");
+    }
+
+    #[test]
+    fn accepts_fabric_authors_as_strings_or_objects() {
+        let authors: Vec<FabricPerson> =
+            serde_json::from_str(r#"["Harvey_Husky", {"name": "Example Author"}, {"name": ""}]"#)
+                .expect("both Fabric author formats should parse");
+
+        let names = authors
+            .into_iter()
+            .filter_map(FabricPerson::into_name)
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["Harvey_Husky", "Example Author"]);
     }
 
     #[test]
@@ -506,7 +533,10 @@ mod tests {
     fn normalizes_camel_case_filename_fallbacks() {
         assert_eq!(
             split_name_and_version("HopoBetterRuinedPortals-[1.21.1-1.21.3]-1.4.4b"),
-            ("Hopo Better Ruined Portals".to_string(), "1.4.4b".to_string())
+            (
+                "Hopo Better Ruined Portals".to_string(),
+                "1.4.4b".to_string()
+            )
         );
         assert_eq!(
             split_name_and_version("better-trees-1.9.3"),

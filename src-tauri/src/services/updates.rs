@@ -5,8 +5,8 @@ use serde::Deserialize;
 use crate::models::instance::Instance;
 use crate::models::mod_metadata::{LoaderKind, ModFile};
 use crate::models::updates::{
-    ModrinthProjectSummary, SuggestionVersionOption, UpdateCandidate, UpdateFile, UpdateItemType,
-    UpdateMatchConfidence, UpdateRow, UpdateStatus,
+    ModrinthProjectDetails, ModrinthProjectSummary, SuggestionVersionOption, UpdateCandidate,
+    UpdateFile, UpdateItemType, UpdateMatchConfidence, UpdateRow, UpdateStatus,
 };
 
 const MODRINTH_API: &str = "https://api.modrinth.com/v2";
@@ -97,6 +97,18 @@ struct ModrinthProject {
     loaders: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct ModrinthProjectMember {
+    user: ModrinthProjectUser,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ModrinthProjectUser {
+    username: String,
+    #[serde(default)]
+    name: Option<String>,
+}
+
 impl Default for UpdateService {
     fn default() -> Self {
         Self {
@@ -150,7 +162,43 @@ impl UpdateService {
             .json()
             .await?;
 
-        Ok(projects.into_iter().map(ModrinthProjectSummary::from).collect())
+        Ok(projects
+            .into_iter()
+            .map(ModrinthProjectSummary::from)
+            .collect())
+    }
+
+    pub async fn get_project_details(&self, project_id: &str) -> Result<ModrinthProjectDetails> {
+        let project: ModrinthProject = self
+            .client
+            .get(format!("{MODRINTH_API}/project/{project_id}"))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        let authors = self.project_authors(project_id).await.unwrap_or_default();
+
+        Ok(ModrinthProjectDetails {
+            project: project.into(),
+            authors,
+        })
+    }
+
+    async fn project_authors(&self, project_id: &str) -> Result<Vec<String>> {
+        let members: Vec<ModrinthProjectMember> = self
+            .client
+            .get(format!("{MODRINTH_API}/project/{project_id}/members"))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+
+        Ok(members
+            .into_iter()
+            .map(|member| member.user.name.unwrap_or(member.user.username))
+            .collect())
     }
 
     pub async fn compatible_versions_for_project(

@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   useInstances,
   useCreateInstance,
@@ -465,6 +466,7 @@ export function InstancesPage() {
             value={instanceSearch}
             onChange={setInstanceSearch}
             placeholder="Search instances by name, path, version..."
+            activityLabel="instances"
           />
         }
       />
@@ -538,7 +540,7 @@ export function InstancesPage() {
       />
 
       {isLoading ? (
-        <p className="text-[var(--color-muted-foreground)]">Loading instances...</p>
+        <InstanceGridSkeleton />
       ) : filtered.length === 0 ? (
         <Card>
           <CardContent className="flex h-48 flex-col items-center justify-center gap-2 p-6">
@@ -660,6 +662,27 @@ export function InstancesPage() {
         }}
         exporting={exportMutation.isPending}
       />
+    </div>
+  );
+}
+
+function InstanceGridSkeleton() {
+  return (
+    <div aria-busy="true" aria-label="Loading instances" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      {Array.from({ length: 6 }, (_, index) => (
+        <Card key={index}>
+          <CardHeader className="pb-2">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-3">
+                <Skeleton className="h-10 w-10" />
+                <div className="space-y-2"><Skeleton className="h-4 w-28" /><Skeleton className="h-3 w-20" /></div>
+              </div>
+              <Skeleton className="h-6 w-14" />
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4"><Skeleton className="h-3 w-32" /><div className="flex gap-2"><Skeleton className="h-8 w-8" /><Skeleton className="h-8 w-8" /><Skeleton className="h-8 w-8" /></div></CardContent>
+        </Card>
+      ))}
     </div>
   );
 }

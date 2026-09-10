@@ -2,6 +2,7 @@ import { Check, Eye, EyeOff, Minus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { PlatformLinkButton } from "@/components/ui/platform-link-button";
+import { TableSkeleton } from "@/components/ui/skeleton";
 import type { ModFile } from "@/lib/types";
 import { formatLoader } from "@/lib/utils";
 
@@ -33,11 +34,7 @@ export function ModTable({
     selectedVisibleCount === 0 ? "empty" : selectedVisibleCount === mods.length ? "checked" : "partial";
 
   if (loading) {
-    return (
-      <div className="flex h-48 items-center justify-center text-[var(--color-muted-foreground)]">
-        Scanning mods...
-      </div>
-    );
+    return <TableSkeleton columns={7} />;
   }
 
   if (mods.length === 0) {

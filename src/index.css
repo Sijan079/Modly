@@ -42,6 +42,15 @@ body {
   min-height: 100vh;
 }
 
+.scout-recommendation-card:hover,
+.scout-recommendation-card:focus-within {
+  border-color: #38bdf8 !important;
+  box-shadow:
+    0 0 0 1px rgba(56, 189, 248, 0.65),
+    0 10px 28px -14px rgba(56, 189, 248, 0.9);
+  transform: translateY(-2px);
+}
+
 .splash-screen {
   display: flex;
   min-height: 100vh;

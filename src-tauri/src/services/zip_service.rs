@@ -354,18 +354,19 @@ pub fn import_modpack_zip(archive_path: &Path, dest_dir: &Path) -> Result<PathBu
     Ok(dest_dir.to_path_buf())
 }
 
-pub fn read_imported_instance_metadata(dest_dir: &Path) -> Result<Option<ImportedInstanceMetadata>> {
+pub fn read_imported_instance_metadata(
+    dest_dir: &Path,
+) -> Result<Option<ImportedInstanceMetadata>> {
     let manifest_path = dest_dir.join("modly-instance.json");
     if !manifest_path.exists() {
         return Ok(None);
     }
 
-    let manifest: InstanceExportManifest = match serde_json::from_str(
-        &fs::read_to_string(&manifest_path)?,
-    ) {
-        Ok(manifest) => manifest,
-        Err(_) => return Ok(None),
-    };
+    let manifest: InstanceExportManifest =
+        match serde_json::from_str(&fs::read_to_string(&manifest_path)?) {
+            Ok(manifest) => manifest,
+            Err(_) => return Ok(None),
+        };
 
     Ok(Some(ImportedInstanceMetadata {
         name: manifest.instance_name,
@@ -418,9 +419,9 @@ fn rebase_import_override(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::category::InstanceCategory;
     use crate::models::instance::LoaderType;
     use crate::models::mod_metadata::{LoaderKind, ModFile, ModMetadata, ModSide};
-    use crate::models::category::InstanceCategory;
     use uuid::Uuid;
 
     fn test_dir() -> PathBuf {
@@ -468,7 +469,10 @@ mod tests {
         }
     }
 
-    fn sample_manifest(instance: &Instance, options: &InstanceExportOptions) -> InstanceExportManifest {
+    fn sample_manifest(
+        instance: &Instance,
+        options: &InstanceExportOptions,
+    ) -> InstanceExportManifest {
         InstanceExportManifest {
             format_version: 1,
             instance_name: instance.name.clone(),
@@ -480,7 +484,10 @@ mod tests {
                     .join("mods")
                     .to_string_lossy()
                     .to_string(),
-                config: instance.resolved_config_path().to_string_lossy().to_string(),
+                config: instance
+                    .resolved_config_path()
+                    .to_string_lossy()
+                    .to_string(),
                 resourcepacks: instance
                     .resolved_pack_path(PackType::ResourcePack)
                     .to_string_lossy()
@@ -507,7 +514,13 @@ mod tests {
         let file = File::open(archive_path).expect("archive should open");
         let mut archive = ZipArchive::new(file).expect("archive should parse");
         (0..archive.len())
-            .map(|index| archive.by_index(index).expect("entry should load").name().to_string())
+            .map(|index| {
+                archive
+                    .by_index(index)
+                    .expect("entry should load")
+                    .name()
+                    .to_string()
+            })
             .collect()
     }
 
@@ -572,11 +585,14 @@ mod tests {
             sample_mod("instance-1", "unknown.jar", true, ModSide::Unknown, &[]),
         ];
 
-        let filtered = filter_mods_for_export(&mods, &ModExportFilter {
-            mod_audience: ModExportAudience::Player,
-            mod_category_id: None,
-            mod_state: ModExportState::Enabled,
-        });
+        let filtered = filter_mods_for_export(
+            &mods,
+            &ModExportFilter {
+                mod_audience: ModExportAudience::Player,
+                mod_category_id: None,
+                mod_state: ModExportState::Enabled,
+            },
+        );
 
         let names = filtered
             .iter()
@@ -588,16 +604,31 @@ mod tests {
     #[test]
     fn mod_filter_can_target_disabled_mods_in_category() {
         let mods = vec![
-            sample_mod("instance-1", "client.jar", true, ModSide::Client, &["Adventure"]),
-            sample_mod("instance-1", "server.jar", false, ModSide::Server, &["Adventure"]),
+            sample_mod(
+                "instance-1",
+                "client.jar",
+                true,
+                ModSide::Client,
+                &["Adventure"],
+            ),
+            sample_mod(
+                "instance-1",
+                "server.jar",
+                false,
+                ModSide::Server,
+                &["Adventure"],
+            ),
             sample_mod("instance-1", "both.jar", false, ModSide::Both, &["Tech"]),
         ];
 
-        let filtered = filter_mods_for_export(&mods, &ModExportFilter {
-            mod_audience: ModExportAudience::Any,
-            mod_category_id: Some("Adventure-id".to_string()),
-            mod_state: ModExportState::Disabled,
-        });
+        let filtered = filter_mods_for_export(
+            &mods,
+            &ModExportFilter {
+                mod_audience: ModExportAudience::Any,
+                mod_category_id: Some("Adventure-id".to_string()),
+                mod_state: ModExportState::Disabled,
+            },
+        );
 
         let names = filtered
             .iter()
@@ -647,7 +678,10 @@ mod tests {
         assert_eq!(manifest_json["summary"]["configFileCount"], 1);
         assert_eq!(
             manifest_json["resolvedSourcePaths"]["datapacks"],
-            instance.resolved_pack_path(PackType::Datapack).to_string_lossy().to_string()
+            instance
+                .resolved_pack_path(PackType::Datapack)
+                .to_string_lossy()
+                .to_string()
         );
     }
 
@@ -678,8 +712,12 @@ mod tests {
         let entries = read_archive_entries(&archive_path);
         assert!(entries.contains(&"mods/enabled-a.jar".to_string()));
         assert!(!entries.iter().any(|entry| entry.starts_with("config/")));
-        assert!(!entries.iter().any(|entry| entry.starts_with("resourcepacks/")));
-        assert!(!entries.iter().any(|entry| entry.starts_with("shaderpacks/")));
+        assert!(!entries
+            .iter()
+            .any(|entry| entry.starts_with("resourcepacks/")));
+        assert!(!entries
+            .iter()
+            .any(|entry| entry.starts_with("shaderpacks/")));
         assert!(!entries.iter().any(|entry| entry.starts_with("datapacks/")));
         assert!(entries.contains(&"modly-instance.json".to_string()));
     }
@@ -773,7 +811,12 @@ mod tests {
         assert_eq!(metadata.minecraft_version.as_deref(), Some("1.20.1"));
         assert_eq!(
             metadata.resource_packs_path.as_deref(),
-            Some(extracted_dir.join("resourcepacks").to_string_lossy().as_ref())
+            Some(
+                extracted_dir
+                    .join("resourcepacks")
+                    .to_string_lossy()
+                    .as_ref()
+            )
         );
         assert_eq!(
             metadata.shader_packs_path.as_deref(),
@@ -856,8 +899,8 @@ mod tests {
         fs::write(extracted_dir.join("modly-instance.json"), "{not valid json")
             .expect("invalid manifest should write");
 
-        let metadata =
-            read_imported_instance_metadata(&extracted_dir).expect("invalid manifest should not fail");
+        let metadata = read_imported_instance_metadata(&extracted_dir)
+            .expect("invalid manifest should not fail");
         assert!(metadata.is_none());
     }
 }

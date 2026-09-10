@@ -44,6 +44,7 @@ import { api } from "@/lib/api";
 import { buildExportDefaultPath } from "@/lib/export-paths";
 import type {
   ExportModsZipInput,
+  Instance,
   ModFile,
   ModIntegrityAudit,
   ModIntegrityReport,
@@ -58,10 +59,32 @@ const defaultFilters: ModListFilters = {
 };
 
 export function ModsPage() {
-  const queryClient = useQueryClient();
   const { data: instances = [] } = useInstances();
   const { selectedInstanceId, setSelectedInstance } = useAppStore();
   const instanceId = selectedInstanceId ?? instances[0]?.id ?? null;
+
+  // Selecting from this page keeps the route mounted. Reset the complete
+  // instance-scoped workspace so it behaves like returning from Instances.
+  return (
+    <ModsWorkspace
+      key={instanceId ?? "no-instance"}
+      instances={instances}
+      instanceId={instanceId}
+      setSelectedInstance={setSelectedInstance}
+    />
+  );
+}
+
+function ModsWorkspace({
+  instances,
+  instanceId,
+  setSelectedInstance,
+}: {
+  instances: Instance[];
+  instanceId: string | null;
+  setSelectedInstance: (id: string | null) => void;
+}) {
+  const queryClient = useQueryClient();
   const selectedInstance = instances.find((instance) => instance.id === instanceId) ?? null;
 
   const { data: mods = [], isLoading } = useMods(instanceId);
@@ -379,6 +402,8 @@ export function ModsPage() {
             value={modSearch}
             onChange={setModSearch}
             placeholder="Search mods by name, file, version, category..."
+            activityLabel="mods"
+            activityContext={selectedInstance?.name}
           />
         }
         filters={

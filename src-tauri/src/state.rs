@@ -17,9 +17,18 @@ static APP_STATE: OnceLock<AppState> = OnceLock::new();
 pub fn init_state(app_handle: &tauri::AppHandle) -> Result<(), String> {
     let app_data_dir = std::env::var_os("MODLY_APP_DATA_DIR")
         .map(PathBuf::from)
-        .unwrap_or(app_handle.path().app_data_dir().map_err(|e| e.to_string())?);
-    let db = Database::new(app_data_dir.clone())
-        .map_err(|e| format!("Database initialization failed at {}: {e}", app_data_dir.display()))?;
+        .unwrap_or(
+            app_handle
+                .path()
+                .app_data_dir()
+                .map_err(|e| e.to_string())?,
+        );
+    let db = Database::new(app_data_dir.clone()).map_err(|e| {
+        format!(
+            "Database initialization failed at {}: {e}",
+            app_data_dir.display()
+        )
+    })?;
     let launcher = LauncherService::new();
     APP_STATE
         .set(AppState {

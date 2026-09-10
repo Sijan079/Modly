@@ -12,12 +12,13 @@ use crate::models::category::{
 use crate::models::instance::{CreateInstanceInput, Instance, LoaderType, UpdateInstanceInput};
 use crate::models::launch::LaunchConfig;
 use crate::models::mod_metadata::{
-    BulkUpdateModMetadataInput, ModFile, ModIntegrityAudit, ModIntegrityAuditStatus, ModIntegrityReport, ModMetadata,
-    ModRelationshipEdge, ModRelationshipGraph, ModRelationshipGraphNode, ModRelationshipType,
-    ModRelationshipsForMod, ModSuggestion, UpdateModMetadataInput,
-    UpdateModRelationshipInput, UpsertModSuggestionInput,
+    BulkUpdateModMetadataInput, ModFile, ModIntegrityAudit, ModIntegrityAuditStatus,
+    ModIntegrityReport, ModMetadata, ModRelationshipEdge, ModRelationshipGraph,
+    ModRelationshipGraphNode, ModRelationshipType, ModRelationshipsForMod, ModSuggestion,
+    UpdateModMetadataInput, UpdateModRelationshipInput, UpsertModSuggestionInput,
 };
 use crate::models::pack_item::{PackItem, PackItemMetadata, PackType, UpdatePackItemMetadataInput};
+use crate::models::scout::{ScoutAnalysis, ScoutTarget};
 use crate::models::settings::AppSettings;
 use crate::models::updates::{SavedUpdateCheck, UpdateRow};
 
@@ -147,6 +148,28 @@ CREATE TABLE IF NOT EXISTS update_checks (
     rows_json TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS scout_targets (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    mods_path TEXT NOT NULL UNIQUE,
+    instance_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS scout_analyses (
+    id TEXT PRIMARY KEY NOT NULL,
+    target_id TEXT NOT NULL REFERENCES scout_targets(id) ON DELETE CASCADE,
+    scanned_at TEXT NOT NULL,
+    analysis_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS scout_provider_cache (
+    cache_key TEXT PRIMARY KEY NOT NULL,
+    response_json TEXT NOT NULL,
+    fetched_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_mods_instance ON mods(instance_id);
 CREATE INDEX IF NOT EXISTS idx_mod_suggestions_instance ON mod_suggestions(instance_id);
 CREATE INDEX IF NOT EXISTS idx_mod_suggestion_categories ON mod_suggestion_category_tags(suggestion_id);
@@ -155,6 +178,7 @@ CREATE INDEX IF NOT EXISTS idx_mod_relationships_target ON mod_relationships(tar
 CREATE INDEX IF NOT EXISTS idx_pack_items_instance ON pack_items(instance_id, pack_type);
 CREATE INDEX IF NOT EXISTS idx_categories_instance ON instance_categories(instance_id);
 CREATE INDEX IF NOT EXISTS idx_logs_created ON logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_scout_analyses_target ON scout_analyses(target_id, scanned_at DESC);
 "#;
 
 fn ensure_column(conn: &Connection, table: &str, column: &str, definition: &str) -> Result<()> {
@@ -182,7 +206,8 @@ fn reset_legacy_mod_side_defaults(conn: &Connection) -> Result<()> {
         return Ok(());
     }
 
-    let mut stmt = conn.prepare("SELECT id, metadata_json FROM mods WHERE metadata_json IS NOT NULL")?;
+    let mut stmt =
+        conn.prepare("SELECT id, metadata_json FROM mods WHERE metadata_json IS NOT NULL")?;
     let rows = stmt.query_map([], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     })?;
@@ -248,6 +273,127 @@ impl Database {
         }
         Ok(Self {
             conn: Mutex::new(conn),
+        })
+    }
+
+    pub fn list_scout_targets(&self) -> Result<Vec<ScoutTarget>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mut statement = conn.prepare(
+            "SELECT id, name, mods_path, instance_id, created_at, updated_at FROM scout_targets ORDER BY updated_at DESC",
+        )?;
+        let targets = statement
+            .query_map([], Self::row_to_scout_target)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(targets)
+    }
+
+    pub fn get_scout_target(&self, id: &str) -> Result<Option<ScoutTarget>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mut statement = conn.prepare(
+            "SELECT id, name, mods_path, instance_id, created_at, updated_at FROM scout_targets WHERE id = ?1",
+        )?;
+        let mut rows = statement.query_map(params![id], Self::row_to_scout_target)?;
+        rows.next().transpose().map_err(Into::into)
+    }
+
+    pub fn upsert_scout_target(
+        &self,
+        name: String,
+        mods_path: String,
+        instance_id: Option<String>,
+    ) -> Result<ScoutTarget> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let id = Uuid::new_v4().to_string();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        conn.execute(
+            "INSERT INTO scout_targets (id, name, mods_path, instance_id, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+             ON CONFLICT(mods_path) DO UPDATE SET name = excluded.name, instance_id = excluded.instance_id, updated_at = excluded.updated_at",
+            params![id, name, mods_path, instance_id, now],
+        )?;
+        conn.query_row(
+            "SELECT id, name, mods_path, instance_id, created_at, updated_at FROM scout_targets WHERE mods_path = ?1",
+            params![mods_path],
+            Self::row_to_scout_target,
+        ).map_err(Into::into)
+    }
+
+    pub fn save_scout_analysis(&self, analysis: &ScoutAnalysis) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        conn.execute(
+            "INSERT INTO scout_analyses (id, target_id, scanned_at, analysis_json) VALUES (?1, ?2, ?3, ?4)",
+            params![analysis.id, analysis.target_id, analysis.scanned_at, serde_json::to_string(analysis)?],
+        )?;
+        conn.execute(
+            "UPDATE scout_targets SET updated_at = ?1 WHERE id = ?2",
+            params![analysis.scanned_at, analysis.target_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_latest_scout_analysis(&self, target_id: &str) -> Result<Option<ScoutAnalysis>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mut statement = conn.prepare(
+            "SELECT analysis_json FROM scout_analyses WHERE target_id = ?1 ORDER BY scanned_at DESC LIMIT 1",
+        )?;
+        let mut rows = statement.query_map(params![target_id], |row| row.get::<_, String>(0))?;
+        rows.next()
+            .transpose()?
+            .map(|json| serde_json::from_str(&json).map_err(Into::into))
+            .transpose()
+    }
+
+    pub fn get_scout_provider_cache(
+        &self,
+        cache_key: &str,
+        max_age_seconds: i64,
+    ) -> Result<Option<String>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mut statement = conn.prepare(
+            "SELECT response_json, fetched_at FROM scout_provider_cache WHERE cache_key = ?1",
+        )?;
+        let mut rows = statement.query_map(params![cache_key], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let Some((json, fetched_at)) = rows.next().transpose()? else {
+            return Ok(None);
+        };
+        let fetched_at = chrono::DateTime::parse_from_rfc3339(&fetched_at)?;
+        let age = chrono::Utc::now().signed_duration_since(fetched_at.with_timezone(&chrono::Utc));
+        Ok((age.num_seconds() <= max_age_seconds).then_some(json))
+    }
+
+    pub fn get_scout_provider_cache_entry(&self, cache_key: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mut statement =
+            conn.prepare("SELECT response_json FROM scout_provider_cache WHERE cache_key = ?1")?;
+        let mut rows = statement.query_map(params![cache_key], |row| row.get::<_, String>(0))?;
+        rows.next().transpose().map_err(Into::into)
+    }
+
+    pub fn save_scout_provider_cache(
+        &self,
+        cache_key: &str,
+        response_json: &str,
+        fetched_at: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        conn.execute(
+            "INSERT INTO scout_provider_cache (cache_key, response_json, fetched_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(cache_key) DO UPDATE SET response_json = excluded.response_json, fetched_at = excluded.fetched_at",
+            params![cache_key, response_json, fetched_at],
+        )?;
+        Ok(())
+    }
+
+    fn row_to_scout_target(row: &rusqlite::Row<'_>) -> rusqlite::Result<ScoutTarget> {
+        Ok(ScoutTarget {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            mods_path: row.get(2)?,
+            instance_id: row.get(3)?,
+            created_at: row.get(4)?,
+            updated_at: row.get(5)?,
         })
     }
 
@@ -435,9 +581,7 @@ impl Database {
         let shader_packs_path = input
             .shader_packs_path
             .unwrap_or(existing.shader_packs_path);
-        let data_packs_path = input
-            .data_packs_path
-            .unwrap_or(existing.data_packs_path);
+        let data_packs_path = input.data_packs_path.unwrap_or(existing.data_packs_path);
         let config_path = input.config_path.unwrap_or(existing.config_path);
         let now = chrono::Utc::now().to_rfc3339();
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -720,7 +864,10 @@ impl Database {
             .ok_or_else(|| anyhow::anyhow!("Mod not found after update"))
     }
 
-    pub fn bulk_update_mod_metadata(&self, input: &BulkUpdateModMetadataInput) -> Result<Vec<ModFile>> {
+    pub fn bulk_update_mod_metadata(
+        &self,
+        input: &BulkUpdateModMetadataInput,
+    ) -> Result<Vec<ModFile>> {
         if input.mod_ids.is_empty() {
             return Ok(vec![]);
         }
@@ -731,7 +878,9 @@ impl Database {
                 .get_mod_by_id(mod_id)?
                 .ok_or_else(|| anyhow::anyhow!("Mod not found: {mod_id}"))?;
             if mod_file.instance_id != input.instance_id {
-                return Err(anyhow::anyhow!("All selected mods must belong to the same instance"));
+                return Err(anyhow::anyhow!(
+                    "All selected mods must belong to the same instance"
+                ));
             }
             existing_mods.push(mod_file);
         }
@@ -760,7 +909,10 @@ impl Database {
                 "UPDATE mods SET metadata_json = ?1 WHERE id = ?2",
                 params![serde_json::to_string(&metadata)?, mod_file.id],
             )?;
-            tx.execute("DELETE FROM mod_category_tags WHERE mod_id = ?1", params![mod_file.id])?;
+            tx.execute(
+                "DELETE FROM mod_category_tags WHERE mod_id = ?1",
+                params![mod_file.id],
+            )?;
             for category_id in &input.category_ids {
                 tx.execute(
                     "INSERT OR IGNORE INTO mod_category_tags (mod_id, category_id) VALUES (?1, ?2)",
@@ -833,7 +985,10 @@ impl Database {
         })
     }
 
-    pub fn get_instance_relationship_graph(&self, instance_id: &str) -> Result<ModRelationshipGraph> {
+    pub fn get_instance_relationship_graph(
+        &self,
+        instance_id: &str,
+    ) -> Result<ModRelationshipGraph> {
         let mods = self.list_mods(instance_id)?;
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
         let nodes = {
@@ -1083,10 +1238,7 @@ impl Database {
         Ok(suggestions)
     }
 
-    pub fn upsert_mod_suggestion(
-        &self,
-        input: &UpsertModSuggestionInput,
-    ) -> Result<ModSuggestion> {
+    pub fn upsert_mod_suggestion(&self, input: &UpsertModSuggestionInput) -> Result<ModSuggestion> {
         let id = input
             .id
             .clone()
@@ -1174,7 +1326,10 @@ impl Database {
             rows.next().transpose()?
         };
         Ok(match suggestion {
-            Some(s) => self.attach_categories_to_suggestions(vec![s])?.into_iter().next(),
+            Some(s) => self
+                .attach_categories_to_suggestions(vec![s])?
+                .into_iter()
+                .next(),
             None => None,
         })
     }
@@ -1205,7 +1360,10 @@ impl Database {
             rows.next().transpose()?
         };
         Ok(match suggestion {
-            Some(s) => self.attach_categories_to_suggestions(vec![s])?.into_iter().next(),
+            Some(s) => self
+                .attach_categories_to_suggestions(vec![s])?
+                .into_iter()
+                .next(),
             None => None,
         })
     }
@@ -1230,9 +1388,8 @@ impl Database {
 
     pub fn get_category_by_id(&self, category_id: &str) -> Result<Option<InstanceCategory>> {
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
-        let mut stmt = conn.prepare(
-            "SELECT id, instance_id, name FROM instance_categories WHERE id = ?1",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT id, instance_id, name FROM instance_categories WHERE id = ?1")?;
         let mut rows = stmt.query(params![category_id])?;
         rows.next()?
             .map(|row| {
@@ -1736,7 +1893,7 @@ mod tests {
     use crate::models::category::{DeleteCategoryInput, DeleteCategoryMode};
     use crate::models::instance::{CreateInstanceInput, LoaderType};
     use crate::models::mod_metadata::{
-        ModDependency, ModRelationshipType, UpdateModRelationshipInput,
+        ModDependency, ModRelationshipType, ModSide, UpdateModRelationshipInput,
     };
 
     fn test_db() -> Database {
@@ -1945,20 +2102,16 @@ mod tests {
             .get_mod_relationships(&source_id)
             .expect("relationships should load");
         assert_eq!(relationships.outgoing.len(), 2);
-        assert!(
-            relationships
-                .outgoing
-                .iter()
-                .any(|edge| edge.target_mod_id == dependency_id
-                    && edge.relationship_type == ModRelationshipType::Dependency)
-        );
-        assert!(
-            relationships
-                .outgoing
-                .iter()
-                .any(|edge| edge.target_mod_id == addon_base_id
-                    && edge.relationship_type == ModRelationshipType::AddonFor)
-        );
+        assert!(relationships
+            .outgoing
+            .iter()
+            .any(|edge| edge.target_mod_id == dependency_id
+                && edge.relationship_type == ModRelationshipType::Dependency));
+        assert!(relationships
+            .outgoing
+            .iter()
+            .any(|edge| edge.target_mod_id == addon_base_id
+                && edge.relationship_type == ModRelationshipType::AddonFor));
 
         let reverse = db
             .get_mod_relationships(&dependency_id)
@@ -2057,9 +2210,7 @@ mod tests {
                 }],
             )
             .expect_err("cross-instance links should be rejected");
-        assert!(cross_instance_error
-            .to_string()
-            .contains("same instance"));
+        assert!(cross_instance_error.to_string().contains("same instance"));
     }
 
     #[test]
@@ -2077,7 +2228,8 @@ mod tests {
         )
         .expect("relationships should save");
 
-        db.delete_mod(&dependency_id).expect("target mod should delete");
+        db.delete_mod(&dependency_id)
+            .expect("target mod should delete");
 
         let relationships = db
             .get_mod_relationships(&source_id)

@@ -5,5 +5,6 @@ pub mod launcher;
 pub mod mods;
 pub mod packs;
 pub mod scan;
+pub mod scout;
 pub mod settings;
 pub mod updates;

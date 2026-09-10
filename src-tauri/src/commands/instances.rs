@@ -26,7 +26,13 @@ pub async fn get_instance(id: String) -> Result<Option<Instance>, String> {
 pub async fn create_instance(input: CreateInstanceInput) -> Result<Instance, String> {
     with_state(|state| {
         std::fs::create_dir_all(&input.game_dir).map_err(|e| e.to_string())?;
-        for folder in ["mods", "resourcepacks", "shaderpacks", "datapacks", "config"] {
+        for folder in [
+            "mods",
+            "resourcepacks",
+            "shaderpacks",
+            "datapacks",
+            "config",
+        ] {
             std::fs::create_dir_all(std::path::Path::new(&input.game_dir).join(folder))
                 .map_err(|e| e.to_string())?;
         }
@@ -39,7 +45,11 @@ pub async fn create_instance(input: CreateInstanceInput) -> Result<Instance, Str
         let created = state
             .db
             .create_instance(CreateInstanceInput {
-                name: if input.name.trim().is_empty() { fallback_name } else { input.name },
+                name: if input.name.trim().is_empty() {
+                    fallback_name
+                } else {
+                    input.name
+                },
                 game_dir: input.game_dir.clone(),
                 loader: input.loader,
                 mc_version: input.mc_version,
@@ -63,7 +73,11 @@ pub async fn create_instance(input: CreateInstanceInput) -> Result<Instance, Str
             .map_err(|e| e.to_string())?;
         state
             .db
-            .append_log("info", &format!("Created instance: {}", saved.name), Some(&saved.name))
+            .append_log(
+                "info",
+                &format!("Created instance: {}", saved.name),
+                Some(&saved.name),
+            )
             .map_err(|e| e.to_string())?;
         Ok(saved)
     })
@@ -75,7 +89,11 @@ pub async fn update_instance(input: UpdateInstanceInput) -> Result<Instance, Str
         let instance = state.db.update_instance(input).map_err(|e| e.to_string())?;
         state
             .db
-            .append_log("info", &format!("Updated instance: {}", instance.name), Some(&instance.name))
+            .append_log(
+                "info",
+                &format!("Updated instance: {}", instance.name),
+                Some(&instance.name),
+            )
             .map_err(|e| e.to_string())?;
         Ok(instance)
     })
@@ -97,7 +115,15 @@ pub async fn delete_instance(id: String, delete_files: bool) -> Result<(), Strin
         state.db.delete_instance(&id).map_err(|e| e.to_string())?;
         state
             .db
-            .append_log("info", &format!("Deleted instance{}: {}", if delete_files { " and files" } else { "" }, instance.name), None)
+            .append_log(
+                "info",
+                &format!(
+                    "Deleted instance{}: {}",
+                    if delete_files { " and files" } else { "" },
+                    instance.name
+                ),
+                None,
+            )
             .map_err(|e| e.to_string())
     })
 }
@@ -115,7 +141,11 @@ pub async fn duplicate_instance(
             .map_err(|e| e.to_string())?;
         state
             .db
-            .append_log("info", &format!("Duplicated instance: {}", instance.name), Some(&instance.name))
+            .append_log(
+                "info",
+                &format!("Duplicated instance: {}", instance.name),
+                Some(&instance.name),
+            )
             .map_err(|e| e.to_string())?;
         Ok(instance)
     })
@@ -165,7 +195,10 @@ pub async fn export_instance_zip(input: ExportInstanceZipInput) -> Result<(), St
                     .join("mods")
                     .to_string_lossy()
                     .to_string(),
-                config: instance.resolved_config_path().to_string_lossy().to_string(),
+                config: instance
+                    .resolved_config_path()
+                    .to_string_lossy()
+                    .to_string(),
                 resourcepacks: instance
                     .resolved_pack_path(PackType::ResourcePack)
                     .to_string_lossy()
@@ -197,7 +230,11 @@ pub async fn export_instance_zip(input: ExportInstanceZipInput) -> Result<(), St
         .map_err(|e| e.to_string())?;
         state
             .db
-            .append_log("info", &format!("Exported instance ZIP: {}", instance.name), Some(&instance.name))
+            .append_log(
+                "info",
+                &format!("Exported instance ZIP: {}", instance.name),
+                Some(&instance.name),
+            )
             .map_err(|e| e.to_string())
     })
 }
@@ -234,7 +271,11 @@ pub async fn export_mods_zip(input: ExportModsZipInput) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
         state
             .db
-            .append_log("info", &format!("Exported mods ZIP: {}", instance.name), Some(&instance.name))
+            .append_log(
+                "info",
+                &format!("Exported mods ZIP: {}", instance.name),
+                Some(&instance.name),
+            )
             .map_err(|e| e.to_string())
     })
 }

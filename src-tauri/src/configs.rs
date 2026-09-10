@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::state::with_state;
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigTreeNode {
@@ -69,6 +71,7 @@ pub async fn read_config_file(path: String) -> Result<String, String> {
 #[tauri::command]
 pub async fn write_config_file(path: String, content: String) -> Result<(), String> {
     fs::write(&path, content).map_err(|e| e.to_string())?;
+    append_config_log("Saved config file", &path);
     Ok(())
 }
 
@@ -79,6 +82,7 @@ pub async fn create_config_file(path: String) -> Result<(), String> {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     fs::write(&path, "").map_err(|e| e.to_string())?;
+    append_config_log("Created config file", &path);
     Ok(())
 }
 
@@ -86,6 +90,7 @@ pub async fn create_config_file(path: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn create_config_folder(path: String) -> Result<(), String> {
     fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+    append_config_log("Created config folder", &path);
     Ok(())
 }
 
@@ -93,6 +98,21 @@ pub async fn create_config_folder(path: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn rename_config_item(old_path: String, new_path: String) -> Result<(), String> {
     fs::rename(&old_path, &new_path).map_err(|e| e.to_string())?;
+    with_state(|state| {
+        state
+            .db
+            .append_log(
+                "info",
+                &format!(
+                    "Renamed config item: {} to {}",
+                    config_item_name(&old_path),
+                    config_item_name(&new_path)
+                ),
+                None,
+            )
+            .map_err(|error| error.to_string())
+    })
+    .ok();
     Ok(())
 }
 
@@ -102,8 +122,33 @@ pub async fn delete_config_item(path: String) -> Result<(), String> {
     let metadata = fs::metadata(&path).map_err(|e| e.to_string())?;
     if metadata.is_dir() {
         fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
+        append_config_log("Deleted config folder", &path);
     } else {
         fs::remove_file(&path).map_err(|e| e.to_string())?;
+        append_config_log("Deleted config file", &path);
     }
     Ok(())
+}
+
+fn append_config_log(action: &str, path: &str) {
+    with_state(|state| {
+        state
+            .db
+            .append_log(
+                "info",
+                &format!("{action}: {}", config_item_name(path)),
+                None,
+            )
+            .map_err(|error| error.to_string())
+    })
+    .ok();
+}
+
+fn config_item_name(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or(path)
+        .to_string()
 }
