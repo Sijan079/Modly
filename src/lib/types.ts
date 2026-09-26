@@ -113,6 +113,7 @@ export interface ModMetadata {
   loader: ModLoaderKind;
   side: ModSide;
   modId: string | null;
+  providedModIds?: string[];
   installedModrinthVersionId?: string | null;
   customized?: boolean;
   nameIsFallback?: boolean;
@@ -171,10 +172,72 @@ export interface UpsertModSuggestionInput {
   categoryIds: string[];
 }
 
+export type ParseStatus = "parsed" | "missingManifest" | "parseFailed";
+export type RelationshipResolution =
+  | "installed"
+  | "missing"
+  | "ambiguous"
+  | "external"
+  | "embedded";
+
+export interface ProviderEnrichment {
+  provider: string;
+  name: string;
+  version: string;
+  projectUrl: string | null;
+  versionId: string | null;
+}
+
+export interface UserAnnotation {
+  metadata: ModMetadata | null;
+  categories: InstanceCategory[];
+  relationships: UpdateModRelationshipInput[];
+}
+
+export interface ObservedMod {
+  fileName: string;
+  filePath: string;
+  enabled: boolean;
+  hashSha256: string | null;
+  manifestPath: string | null;
+  parseStatus: ParseStatus;
+  parseError: string | null;
+  observed: ModMetadata | null;
+  minecraftConstraints: string[];
+  providerEnrichment: ProviderEnrichment | null;
+  userAnnotation: UserAnnotation | null;
+}
+
+export interface DeclaredRelationship {
+  sourceFilePath: string;
+  targetModId: string;
+  targetFilePath: string | null;
+  kind: string;
+  versionRange: string | null;
+  side: ModSide | null;
+  manifestPath: string;
+  resolution: RelationshipResolution;
+}
+
+export interface PackTruth {
+  instanceId: string;
+  mods: ObservedMod[];
+  relationships: DeclaredRelationship[];
+}
+
+export interface ModTruthRelationships {
+  filePath: string;
+  outgoing: DeclaredRelationship[];
+  incoming: DeclaredRelationship[];
+  requiredDependencyPaths: string[][];
+  requiredDependentPaths: string[][];
+}
+
 export interface ModDependency {
   modId: string;
   versionRange: string | null;
   kind: string;
+  side?: ModSide | null;
 }
 
 export type ModRelationshipType = "dependency" | "addon_for";
@@ -242,28 +305,9 @@ export interface ScanContentSummary {
   saveCount: number;
 }
 
-export interface LaunchConfig {
-  id: string;
-  instanceId: string;
-  javaPath: string;
-  minMemoryMb: number;
-  maxMemoryMb: number;
-  jvmArgs: string;
-  gameArgs: string;
-  wrapperCommand: string | null;
-}
-
-export interface LaunchStatus {
-  running: boolean;
-  pid: number | null;
-  instanceId: string | null;
-}
-
 export interface AppSettings {
   minecraftDir: string | null;
   instancesDir: string | null;
-  defaultJavaPath: string | null;
-  defaultMaxMemoryMb: number;
   exportModpackDir: string | null;
   exportModlistDir: string | null;
   autoScanOnInstanceAdd: boolean;

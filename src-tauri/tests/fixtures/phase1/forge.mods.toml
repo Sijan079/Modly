@@ -1,0 +1,30 @@
+modLoader="javafml"
+loaderVersion="[47,)"
+
+[[mods]]
+modId="librarymod"
+displayName="Library Mod"
+version="2.1.0"
+authors="Bob"
+
+[[dependencies.librarymod]]
+modId="minecraft"
+mandatory=true
+versionRange="[1.20.1,1.21)"
+side="BOTH"
+
+[[dependencies.librarymod]]
+modId="optionalmod"
+mandatory=false
+versionRange="[1.0,)"
+side="CLIENT"
+
+[[mods]]
+modId="secondarylib"
+displayName="Secondary Library"
+version="1.0.0"
+
+[[dependencies.secondarylib]]
+modId="fabric_alias"
+mandatory=false
+versionRange="[1,)"

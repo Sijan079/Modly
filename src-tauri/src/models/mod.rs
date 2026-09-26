@@ -1,8 +1,8 @@
 pub mod category;
 pub mod instance;
-pub mod launch;
 pub mod mod_metadata;
 pub mod pack_item;
+pub mod pack_truth;
 pub mod scan;
 pub mod scout;
 pub mod settings;

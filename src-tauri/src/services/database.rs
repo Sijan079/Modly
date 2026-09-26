@@ -10,7 +10,6 @@ use crate::models::category::{
     CreateCategoryInput, DeleteCategoryInput, DeleteCategoryMode, InstanceCategory,
 };
 use crate::models::instance::{CreateInstanceInput, Instance, LoaderType, UpdateInstanceInput};
-use crate::models::launch::LaunchConfig;
 use crate::models::mod_metadata::{
     BulkUpdateModMetadataInput, ModFile, ModIntegrityAudit, ModIntegrityAuditStatus,
     ModIntegrityReport, ModMetadata, ModRelationshipEdge, ModRelationshipGraph,
@@ -64,17 +63,6 @@ CREATE TABLE IF NOT EXISTS mod_suggestions (
     hash_sha256 TEXT,
     source_url TEXT,
     metadata_json TEXT
-);
-
-CREATE TABLE IF NOT EXISTS launch_configs (
-    id TEXT PRIMARY KEY NOT NULL,
-    instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
-    java_path TEXT NOT NULL,
-    min_memory_mb INTEGER NOT NULL DEFAULT 512,
-    max_memory_mb INTEGER NOT NULL DEFAULT 4096,
-    jvm_args TEXT NOT NULL DEFAULT '',
-    game_args TEXT NOT NULL DEFAULT '',
-    wrapper_command TEXT
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -181,6 +169,16 @@ CREATE INDEX IF NOT EXISTS idx_logs_created ON logs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_scout_analyses_target ON scout_analyses(target_id, scanned_at DESC);
 "#;
 
+fn remove_legacy_launcher_data(conn: &mut Connection) -> Result<()> {
+    let transaction = conn.transaction()?;
+    transaction.execute_batch(
+        "DROP TABLE IF EXISTS launch_configs;
+         DELETE FROM settings WHERE key IN ('default_java_path', 'default_max_memory_mb');",
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
 fn ensure_column(conn: &Connection, table: &str, column: &str, definition: &str) -> Result<()> {
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
     let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
@@ -243,10 +241,11 @@ impl Database {
     pub fn new(app_data_dir: PathBuf) -> Result<Self> {
         std::fs::create_dir_all(&app_data_dir)?;
         let db_path = app_data_dir.join("modpack_manager.db");
-        let conn = Connection::open(&db_path)
+        let mut conn = Connection::open(&db_path)
             .with_context(|| format!("Failed to open database at {}", db_path.display()))?;
         conn.execute("PRAGMA foreign_keys = ON", [])?;
         conn.execute_batch(SCHEMA)?;
+        remove_legacy_launcher_data(&mut conn)?;
         ensure_column(&conn, "instances", "resource_packs_path", "TEXT")?;
         ensure_column(&conn, "instances", "shader_packs_path", "TEXT")?;
         ensure_column(&conn, "instances", "data_packs_path", "TEXT")?;
@@ -409,10 +408,6 @@ impl Database {
             match key.as_str() {
                 "minecraft_dir" => settings.minecraft_dir = Some(value),
                 "instances_dir" => settings.instances_dir = Some(value),
-                "default_java_path" => settings.default_java_path = Some(value),
-                "default_max_memory_mb" => {
-                    settings.default_max_memory_mb = value.parse().unwrap_or(4096)
-                }
                 "export_modpack_dir" => settings.export_modpack_dir = non_empty_setting(value),
                 "export_modlist_dir" => settings.export_modlist_dir = non_empty_setting(value),
                 "auto_scan_on_instance_add" => settings.auto_scan_on_instance_add = value == "true",
@@ -444,14 +439,6 @@ impl Database {
             (
                 "instances_dir",
                 settings.instances_dir.clone().unwrap_or_default(),
-            ),
-            (
-                "default_java_path",
-                settings.default_java_path.clone().unwrap_or_default(),
-            ),
-            (
-                "default_max_memory_mb",
-                settings.default_max_memory_mb.to_string(),
             ),
             (
                 "export_modpack_dir",
@@ -838,6 +825,11 @@ impl Database {
             loader: input.loader,
             side: input.side,
             mod_id: input.mod_id_field.clone(),
+            provided_mod_ids: existing
+                .metadata
+                .as_ref()
+                .map(|metadata| metadata.provided_mod_ids.clone())
+                .unwrap_or_default(),
             installed_modrinth_version_id: input.installed_modrinth_version_id.clone(),
             customized: true,
             name_is_fallback: false,
@@ -897,6 +889,7 @@ impl Database {
                 loader: input.loader,
                 side: input.side,
                 mod_id: None,
+                provided_mod_ids: vec![],
                 installed_modrinth_version_id: None,
                 customized: true,
                 name_is_fallback: false,
@@ -1037,19 +1030,19 @@ impl Database {
         };
         let node_by_mod_id = mods
             .iter()
-            .filter_map(|mod_file| {
+            .flat_map(|mod_file| {
                 mod_file
                     .metadata
-                    .as_ref()
-                    .and_then(|metadata| metadata.mod_id.as_ref())
-                    .map(|mod_id| (mod_id.to_ascii_lowercase(), mod_file))
+                    .iter()
+                    .flat_map(|metadata| {
+                        metadata
+                            .mod_id
+                            .iter()
+                            .chain(metadata.provided_mod_ids.iter())
+                    })
+                    .map(move |mod_id| (mod_id.to_ascii_lowercase(), mod_file))
             })
             .collect::<std::collections::HashMap<_, _>>();
-        let manual_dependency_sources = edges
-            .iter()
-            .filter(|edge| edge.relationship_type == ModRelationshipType::Dependency)
-            .map(|edge| edge.source_mod_id.clone())
-            .collect::<std::collections::HashSet<_>>();
         let mut merged_edges = edges.clone();
         let mut seen_pairs = edges
             .iter()
@@ -1057,13 +1050,13 @@ impl Database {
             .collect::<std::collections::HashSet<_>>();
 
         for source in &mods {
-            if manual_dependency_sources.contains(&source.id) {
-                continue;
-            }
             let Some(metadata) = source.metadata.as_ref() else {
                 continue;
             };
             for dependency in &metadata.dependencies {
+                if dependency.kind != "required" && dependency.kind != "depends" {
+                    continue;
+                }
                 let target_key = dependency.mod_id.to_ascii_lowercase();
                 let Some(target) = node_by_mod_id.get(&target_key) else {
                     continue;
@@ -1257,6 +1250,7 @@ impl Database {
             loader: input.loader,
             side: input.side,
             mod_id: input.mod_id_field.clone(),
+            provided_mod_ids: vec![],
             installed_modrinth_version_id: None,
             customized: true,
             name_is_fallback: false,
@@ -1752,53 +1746,6 @@ impl Database {
         Ok(())
     }
 
-    pub fn get_launch_config(&self, instance_id: &str) -> Result<Option<LaunchConfig>> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
-        let mut stmt = conn.prepare(
-            "SELECT id, instance_id, java_path, min_memory_mb, max_memory_mb, jvm_args, game_args, wrapper_command
-             FROM launch_configs WHERE instance_id = ?1 LIMIT 1",
-        )?;
-        let mut rows = stmt.query_map(params![instance_id], |row| {
-            Ok(LaunchConfig {
-                id: row.get(0)?,
-                instance_id: row.get(1)?,
-                java_path: row.get(2)?,
-                min_memory_mb: row.get::<_, i64>(3)? as u32,
-                max_memory_mb: row.get::<_, i64>(4)? as u32,
-                jvm_args: row.get(5)?,
-                game_args: row.get(6)?,
-                wrapper_command: row.get(7)?,
-            })
-        })?;
-        Ok(rows.next().transpose()?)
-    }
-
-    pub fn save_launch_config(&self, config: &LaunchConfig) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
-        conn.execute(
-            "INSERT INTO launch_configs (id, instance_id, java_path, min_memory_mb, max_memory_mb, jvm_args, game_args, wrapper_command)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-             ON CONFLICT(id) DO UPDATE SET
-               java_path = excluded.java_path,
-               min_memory_mb = excluded.min_memory_mb,
-               max_memory_mb = excluded.max_memory_mb,
-               jvm_args = excluded.jvm_args,
-               game_args = excluded.game_args,
-               wrapper_command = excluded.wrapper_command",
-            params![
-                config.id,
-                config.instance_id,
-                config.java_path,
-                config.min_memory_mb,
-                config.max_memory_mb,
-                config.jvm_args,
-                config.game_args,
-                config.wrapper_command
-            ],
-        )?;
-        Ok(())
-    }
-
     pub fn append_log(&self, level: &str, message: &str, context: Option<&str>) -> Result<()> {
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
         let now = chrono::Utc::now().to_rfc3339();
@@ -2238,6 +2185,82 @@ mod tests {
     }
 
     #[test]
+    fn removes_legacy_launcher_data_without_changing_pack_data() {
+        let dir = std::env::temp_dir().join(format!("modly-db-test-{}", Uuid::new_v4()));
+        let db = Database::new(dir.clone()).expect("db should initialize");
+        let instance = db
+            .create_instance(CreateInstanceInput {
+                name: "Existing pack".to_string(),
+                game_dir: "C:\\existing-pack".to_string(),
+                loader: LoaderType::Fabric,
+                mc_version: Some("1.20.1".to_string()),
+            })
+            .expect("instance should be created");
+
+        {
+            let conn = db.conn.lock().expect("lock should work");
+            conn.execute_batch(
+                "CREATE TABLE launch_configs (
+                    id TEXT PRIMARY KEY,
+                    instance_id TEXT REFERENCES instances(id),
+                    java_path TEXT NOT NULL
+                );
+                 INSERT INTO settings (key, value) VALUES
+                    ('default_java_path', 'javaw'),
+                    ('default_max_memory_mb', '4096'),
+                    ('theme', 'light');",
+            )
+            .expect("legacy data should be seeded");
+            conn.execute(
+                "INSERT INTO launch_configs (id, instance_id, java_path) VALUES ('old', ?1, 'javaw')",
+                [&instance.id],
+            )
+            .expect("legacy launch row should be seeded");
+        }
+        drop(db);
+
+        for _ in 0..2 {
+            let reopened = Database::new(dir.clone()).expect("database should reopen");
+            let conn = reopened.conn.lock().expect("lock should work");
+            let launcher_table_count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'launch_configs'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("schema should be readable");
+            assert_eq!(launcher_table_count, 0);
+
+            let launcher_settings_count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM settings WHERE key IN ('default_java_path', 'default_max_memory_mb')",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("settings should be readable");
+            assert_eq!(launcher_settings_count, 0);
+
+            let theme: String = conn
+                .query_row(
+                    "SELECT value FROM settings WHERE key = 'theme'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("unrelated setting should remain");
+            assert_eq!(theme, "light");
+
+            let pack_count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM instances WHERE id = ?1",
+                    [&instance.id],
+                    |row| row.get(0),
+                )
+                .expect("pack should remain");
+            assert_eq!(pack_count, 1);
+        }
+    }
+
+    #[test]
     fn persists_launch_window_mode_in_settings() {
         let db = test_db();
         let mut settings = db.get_settings().expect("settings should load");
@@ -2307,10 +2330,12 @@ mod tests {
                         mod_id: "targetmod".to_string(),
                         version_range: Some("[1.0,)".to_string()),
                         kind: "required".to_string(),
+                        side: None,
                     }],
                     loader: crate::models::mod_metadata::LoaderKind::NeoForge,
                     side: ModSide::Unknown,
                     mod_id: Some("sourcemod".to_string()),
+                    provided_mod_ids: vec![],
                     installed_modrinth_version_id: None,
                     customized: false,
                     name_is_fallback: false,
@@ -2340,6 +2365,7 @@ mod tests {
                     loader: crate::models::mod_metadata::LoaderKind::NeoForge,
                     side: ModSide::Unknown,
                     mod_id: Some("targetmod".to_string()),
+                    provided_mod_ids: vec![],
                     installed_modrinth_version_id: None,
                     customized: false,
                     name_is_fallback: false,
@@ -2349,6 +2375,29 @@ mod tests {
             },
         );
 
+        db.upsert_mod(&ModFile {
+            id: "manual-target".to_string(),
+            instance_id: instance.id.clone(),
+            file_name: "manual-target.jar".to_string(),
+            file_path: "C:\\detected-instance\\mods\\manual-target.jar".to_string(),
+            installed_at: "now".to_string(),
+            enabled: true,
+            hash_sha256: None,
+            source_url: None,
+            metadata: None,
+            categories: vec![],
+            related_mods: vec![],
+        })
+        .expect("manual target should save");
+        db.replace_mod_relationships(
+            "source",
+            &[UpdateModRelationshipInput {
+                target_mod_id: "manual-target".to_string(),
+                relationship_type: ModRelationshipType::Dependency,
+            }],
+        )
+        .expect("manual relationship should save");
+
         let graph = db
             .get_instance_relationship_graph(&instance.id)
             .expect("graph should load");
@@ -2356,6 +2405,11 @@ mod tests {
         assert!(graph.edges.iter().any(|edge| {
             edge.source_mod_id == "source"
                 && edge.target_mod_id == "target"
+                && edge.relationship_type == ModRelationshipType::Dependency
+        }));
+        assert!(graph.edges.iter().any(|edge| {
+            edge.source_mod_id == "source"
+                && edge.target_mod_id == "manual-target"
                 && edge.relationship_type == ModRelationshipType::Dependency
         }));
     }

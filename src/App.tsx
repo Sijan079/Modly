@@ -94,10 +94,6 @@ function StartupGate({ children }: { children: ReactNode }) {
           queryKey: ["logs"],
           queryFn: () => api.files.logs(500),
         }),
-        queryClient.prefetchQuery({
-          queryKey: ["launch-status"],
-          queryFn: () => api.launcher.status(),
-        }),
         minimumSplashMs,
       ]);
 

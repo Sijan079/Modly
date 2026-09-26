@@ -560,6 +560,7 @@ mod tests {
                 loader: LoaderKind::Fabric,
                 side,
                 mod_id: None,
+                provided_mod_ids: vec![],
                 installed_modrinth_version_id: None,
                 customized: false,
                 name_is_fallback: false,

@@ -92,6 +92,8 @@ pub struct ModMetadata {
     pub side: ModSide,
     pub mod_id: Option<String>,
     #[serde(default)]
+    pub provided_mod_ids: Vec<String>,
+    #[serde(default)]
     pub installed_modrinth_version_id: Option<String>,
     /// User-edited metadata; preserved across rescans when true.
     #[serde(default)]
@@ -184,7 +186,7 @@ fn default_mod_side() -> ModSide {
     ModSide::Unknown
 }
 
-/// Build a default Modrinth project URL from a mod slug/id.
+/// Build a Modrinth project URL from a user-supplied slug or ID.
 pub fn modrinth_url_from_id(mod_id: &str) -> String {
     let slug = mod_id.trim().trim_start_matches('/');
     format!("https://modrinth.com/mod/{slug}")
@@ -196,6 +198,8 @@ pub struct ModDependency {
     pub mod_id: String,
     pub version_range: Option<String>,
     pub kind: String,
+    #[serde(default)]
+    pub side: Option<ModSide>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

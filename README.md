@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  A cleaner way to manage Minecraft instances, sort your mods, catch problems early, and keep everything in one place without the usual folder chaos.
+  A desktop modpack manager for understanding, maintaining, and improving Minecraft packs in the folders you already use.
 </p>
 
 <p align="center">
@@ -15,44 +15,14 @@
   <img alt="SQLite" src="https://img.shields.io/badge/SQLite-local_data-003B57?style=flat-square&logo=sqlite" />
 </p>
 
-## Screenshots
-
-<table>
-  <tr>
-    <td width="50%">
-      <strong>Dashboard</strong><br />
-      <img src="docs/screenshots/dashboard.png" alt="Modly dashboard" />
-    </td>
-    <td width="50%">
-      <strong>Mods</strong><br />
-      <img src="docs/screenshots/mods.png" alt="Modly mods page" />
-    </td>
-  </tr>
-  <tr>
-    <td width="50%">
-      <strong>Relationships</strong><br />
-      <img src="docs/screenshots/relationships.png" alt="Modly relationships page" />
-    </td>
-    <td width="50%">
-      <strong>Updates</strong><br />
-      <img src="docs/screenshots/updates.png" alt="Modly updates page" />
-    </td>
-  </tr>
-  <tr>
-    <td width="50%">
-      <strong>Configs</strong><br />
-      <img src="docs/screenshots/configs.png" alt="Modly configs page" />
-    </td>
-    <td width="50%"></td>
-  </tr>
-</table>
+Modly manages pack contents and metadata. It does not launch Minecraft or manage game accounts or Java runtimes. See [the product boundary](docs/PRODUCT.md).
 
 ## Highlights
 
 - Create, duplicate, import, export, and organize Minecraft instances your way.
 - Sort installed mods faster, tag them, and filter what matters in seconds.
 - Explore a graph-first Relationships workspace powered by Cytoscape.js with pan, zoom, fit-to-view, search focus, and isolated-mod filtering.
-- Track manual mod relationships visually as dependency and add-on links without needing to preselect a mod first.
+- Inspect declared dependencies and manual dependency or add-on links in the Relationships workspace.
 - Click any mod in the graph to edit its outgoing relationships in a lightweight table modal with add, save, and bulk-delete flows.
 - Save mod ideas as suggestions, preview their source pages, and turn them into installed mods when you're ready.
 - Use Modpack Scout to read installed JAR metadata from a managed instance or a selected local folder without changing the pack.

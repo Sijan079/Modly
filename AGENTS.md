@@ -36,3 +36,24 @@ Every changed line should trace directly to the requested work.
 - For refactors, verify behavior before and after the change.
 - For multi-step work, state a brief plan and the verification for each step.
 - Continue until the agreed success criteria are verified.
+
+## Versioned Builds
+
+- Follow the SemVer and release checklist in `docs/VERSIONING.md`.
+- Treat every requested distributable desktop build as a versioned artifact.
+- Unless the user supplies a version or explicitly requests a same-version
+  rebuild, increment the patch version for maintenance builds; use a minor or
+  major increment when the SemVer change requires it.
+- Keep the application version synchronized in `package.json`, the root package
+  entries in `package-lock.json`, `src-tauri/Cargo.toml`, the application package
+  in `src-tauri/Cargo.lock`, and `src-tauri/tauri.conf.json`.
+- After building, verify and report the version embedded in the artifact and its
+  final filename.
+
+## Project Skills
+
+- Use the project `ui-ux-pro-max` skill for UI/UX design work in Modly.
+- Do not use the global `minecraft-modding`, `minecraft-testing`, or
+  `design-taste-frontend` skills for this repository.
+- Launch Codex through `.codex/start-modly.ps1` when these global skills must be
+  hidden from the CLI skill catalog.

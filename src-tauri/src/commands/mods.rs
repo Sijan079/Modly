@@ -15,6 +15,7 @@ use crate::models::mod_metadata::{
 };
 use crate::services::hash_service::hash_file;
 use crate::services::mod_parser::{fallback_metadata, parse_mod_jar};
+use crate::services::pack_truth::scan_pack_truth;
 use crate::services::scanner::scan_mods_directory;
 use crate::services::updates::UpdateService;
 use crate::state::with_state;
@@ -22,6 +23,45 @@ use crate::state::with_state;
 #[command]
 pub async fn list_mods(instance_id: String) -> Result<Vec<ModFile>, String> {
     with_state(|state| state.db.list_mods(&instance_id).map_err(|e| e.to_string()))
+}
+
+#[command]
+pub async fn get_pack_truth(
+    instance_id: String,
+) -> Result<crate::models::pack_truth::PackTruth, String> {
+    with_state(|state| {
+        let instance = state
+            .db
+            .get_instance(&instance_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "Instance not found".to_string())?;
+        let saved_mods = state
+            .db
+            .list_mods(&instance_id)
+            .map_err(|error| error.to_string())?;
+        scan_pack_truth(
+            &instance_id,
+            &Path::new(&instance.game_dir).join("mods"),
+            &saved_mods,
+        )
+        .map_err(|error| error.to_string())
+    })
+}
+
+#[command]
+pub async fn get_mod_truth_relationships(
+    instance_id: String,
+    file_path: String,
+) -> Result<crate::models::pack_truth::ModTruthRelationships, String> {
+    let truth = get_pack_truth(instance_id).await?;
+    if !truth
+        .mods
+        .iter()
+        .any(|mod_file| mod_file.file_path == file_path)
+    {
+        return Err("Mod not found in local pack".to_string());
+    }
+    Ok(truth.relationships_for(&file_path))
 }
 
 #[command]
@@ -135,7 +175,9 @@ pub async fn scan_instance_mods(instance_id: String) -> Result<Vec<ModFile>, Str
             continue;
         };
         metadata.name = project.project.title;
-        metadata.version = project.version_number;
+        if metadata.version == "?" {
+            metadata.version = project.version_number;
+        }
         metadata.installed_modrinth_version_id = Some(project.version_id);
         metadata.modrinth_url = Some(format!(
             "https://modrinth.com/project/{}",
@@ -909,7 +951,7 @@ fn build_mod_list_html(input: &ExportModListInput, css_path: &Path) -> String {
                 items,
                 "<li>\
                     <a href=\"{}\" target=\"_blank\" rel=\"noreferrer\">{}</a>\
-                    <div class=\"meta\">{} · {} · {} · {}</div>\
+                    <div class=\"meta\">{} Ã‚Â· {} Ã‚Â· {} Ã‚Â· {}</div>\
                 </li>",
                 escape_html(&href),
                 escape_html(&name),
@@ -945,8 +987,8 @@ fn build_mod_list_html(input: &ExportModListInput, css_path: &Path) -> String {
     <h1>{instance} Mod List</h1>\
     <div class=\"summary\">\
       <h3>Enabled Mods Exported: {shown}</h3>\
-      <p>From {total} total mods · Generated {generated}</p>\
-      <p>Search: {search} · Status: {status} · Loader: {loader} · Side: {side} · Category: {category}</p>\
+      <p>From {total} total mods Ã‚Â· Generated {generated}</p>\
+      <p>Search: {search} Ã‚Â· Status: {status} Ã‚Â· Loader: {loader} Ã‚Â· Side: {side} Ã‚Â· Category: {category}</p>\
     </div>\
     {sections}\
   </main>\

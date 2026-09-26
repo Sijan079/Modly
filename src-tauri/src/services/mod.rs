@@ -1,7 +1,7 @@
 pub mod database;
 pub mod hash_service;
-pub mod launcher;
 pub mod mod_parser;
+pub mod pack_truth;
 pub mod providers;
 pub mod scanner;
 pub mod scout;

@@ -1,7 +1,7 @@
 [package]
 name = "modpack-manager"
-version = "1.2.2"
-description = "Minecraft instance and mod manager"
+version = "1.3.0"
+description = "Minecraft modpack manager"
 authors = ["you"]
 edition = "2021"
 
@@ -16,7 +16,6 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
-tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["sync"] }

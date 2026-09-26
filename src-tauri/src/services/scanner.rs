@@ -122,12 +122,18 @@ pub fn scan_mods_directory(mods_dir: &Path) -> Result<Vec<PathBuf>> {
         let path = entry.path();
         if path.is_file() {
             if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                if ext.eq_ignore_ascii_case("jar") {
+                if ext.eq_ignore_ascii_case("jar")
+                    || path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.to_ascii_lowercase().ends_with(".jar.disabled"))
+                {
                     jars.push(path.to_path_buf());
                 }
             }
         }
     }
+    jars.sort();
     jars.sort();
     Ok(jars)
 }

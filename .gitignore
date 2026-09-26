@@ -24,3 +24,7 @@ src-tauri/target*
 *.njsproj
 *.sln
 *.sw?
+
+# Python skill caches
+__pycache__/
+*.pyc

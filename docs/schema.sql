@@ -35,17 +35,6 @@ CREATE TABLE IF NOT EXISTS mod_suggestions (
     metadata_json TEXT
 );
 
-CREATE TABLE IF NOT EXISTS launch_configs (
-    id TEXT PRIMARY KEY NOT NULL,
-    instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
-    java_path TEXT NOT NULL,
-    min_memory_mb INTEGER NOT NULL DEFAULT 512,
-    max_memory_mb INTEGER NOT NULL DEFAULT 4096,
-    jvm_args TEXT NOT NULL DEFAULT '',
-    game_args TEXT NOT NULL DEFAULT '',
-    wrapper_command TEXT
-);
-
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY NOT NULL,
     value TEXT NOT NULL

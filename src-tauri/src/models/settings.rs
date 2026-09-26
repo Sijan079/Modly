@@ -5,8 +5,6 @@ use serde::{Deserialize, Serialize};
 pub struct AppSettings {
     pub minecraft_dir: Option<String>,
     pub instances_dir: Option<String>,
-    pub default_java_path: Option<String>,
-    pub default_max_memory_mb: u32,
     pub export_modpack_dir: Option<String>,
     pub export_modlist_dir: Option<String>,
     pub auto_scan_on_instance_add: bool,
@@ -29,8 +27,6 @@ impl Default for AppSettings {
         Self {
             minecraft_dir: None,
             instances_dir: None,
-            default_java_path: None,
-            default_max_memory_mb: 4096,
             export_modpack_dir: None,
             export_modlist_dir: None,
             auto_scan_on_instance_add: true,

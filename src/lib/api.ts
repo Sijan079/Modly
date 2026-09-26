@@ -5,11 +5,11 @@ import type {
   ExportInstanceZipInput,
   ExportModsZipInput,
   Instance,
-  LaunchConfig,
-  LaunchStatus,
   LogEntry,
   MinecraftScanResult,
   ModFile,
+  PackTruth,
+  ModTruthRelationships,
   ModIntegrityAudit,
   ModMetadata,
   ModRelationshipGraph,
@@ -95,6 +95,10 @@ export const api = {
       invoke<ModSuggestion[]>("list_mod_suggestions", { instanceId }),
     scan: (instanceId: string) =>
       invoke<ModFile[]>("scan_instance_mods", { instanceId }),
+    truth: (instanceId: string) =>
+      invoke<PackTruth>("get_pack_truth", { instanceId }),
+    truthRelationships: (instanceId: string, filePath: string) =>
+      invoke<ModTruthRelationships>("get_mod_truth_relationships", { instanceId, filePath }),
     checkIntegrity: (instanceId: string) =>
       invoke<ModIntegrityAudit>("check_mod_integrity", { instanceId }),
     latestIntegrityAudit: (instanceId: string) =>
@@ -201,19 +205,6 @@ export const api = {
     logs: (limit = 200) => invoke<LogEntry[]>("list_logs", { limit }),
     appendLog: (level: string, message: string, context?: string) =>
       invoke<void>("append_log", { level, message, context }),
-  },
-  launcher: {
-    detectJava: () => invoke<string | null>("detect_java_path"),
-    getConfig: (instanceId: string) =>
-      invoke<LaunchConfig | null>("get_launch_config", { instanceId }),
-    saveConfig: (config: LaunchConfig) =>
-      invoke<void>("save_launch_config", { config }),
-    launch: (instanceId: string, configId?: string) =>
-      invoke<number>("launch_instance", {
-        request: { instanceId, configId },
-      }),
-    stop: () => invoke<void>("stop_instance"),
-    status: () => invoke<LaunchStatus>("get_launch_status"),
   },
   settings: {
     get: () => invoke<AppSettings>("get_settings"),

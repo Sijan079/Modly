@@ -5,32 +5,61 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use zip::ZipArchive;
 
-use crate::models::mod_metadata::{
-    modrinth_url_from_id, LoaderKind, ModDependency, ModMetadata, ModSide,
-};
+use crate::models::mod_metadata::{LoaderKind, ModDependency, ModMetadata, ModSide};
 
 pub fn parse_mod_jar(path: &Path) -> Result<ModMetadata> {
+    Ok(parse_mod_jar_observed(path)?
+        .map(|(metadata, _)| metadata)
+        .unwrap_or_else(|| fallback_metadata(path)))
+}
+
+/// Returns only facts found in a supported manifest. Missing manifests stay unknown.
+pub fn parse_mod_jar_observed(path: &Path) -> Result<Option<(ModMetadata, &'static str)>> {
     let file = std::fs::File::open(path)
         .with_context(|| format!("Failed to open mod jar: {}", path.display()))?;
     let mut archive = ZipArchive::new(file)?;
 
-    if let Some(meta) = try_parse_fabric(&mut archive)? {
-        return Ok(finalize_metadata(meta, path));
+    for manifest in [
+        "fabric.mod.json",
+        "META-INF/neoforge.mods.toml",
+        "META-INF/mods.toml",
+        "mcmod.info",
+    ] {
+        if !archive.file_names().any(|name| name == manifest) {
+            continue;
+        }
+        let metadata = match manifest {
+            "fabric.mod.json" => try_parse_fabric(&mut archive)?,
+            "META-INF/neoforge.mods.toml" | "META-INF/mods.toml" => {
+                try_parse_neoforge_forge(&mut archive)?
+            }
+            _ => try_parse_legacy_mcmod(&mut archive)?,
+        };
+        let mut metadata = metadata
+            .with_context(|| format!("Could not read manifest {manifest} in {}", path.display()))?;
+        for embedded in archive
+            .file_names()
+            .filter(|name| name.starts_with("META-INF/jarjar/") && name.ends_with(".jar"))
+        {
+            if !metadata
+                .dependencies
+                .iter()
+                .any(|dependency| dependency.kind == "embedded" && dependency.mod_id == embedded)
+            {
+                metadata.dependencies.push(ModDependency {
+                    mod_id: embedded.to_string(),
+                    version_range: None,
+                    kind: "embedded".to_string(),
+                    side: None,
+                });
+            }
+        }
+        metadata
+            .dependencies
+            .sort_by(|left, right| (&left.kind, &left.mod_id).cmp(&(&right.kind, &right.mod_id)));
+        return Ok(Some((finalize_metadata(metadata, path), manifest)));
     }
-
-    let file = std::fs::File::open(path)?;
-    let mut archive = ZipArchive::new(file)?;
-    if let Some(meta) = try_parse_neoforge_forge(&mut archive)? {
-        return Ok(finalize_metadata(meta, path));
-    }
-
-    let file = std::fs::File::open(path)?;
-    let mut archive = ZipArchive::new(file)?;
-    if let Some(meta) = try_parse_legacy_mcmod(&mut archive)? {
-        return Ok(finalize_metadata(meta, path));
-    }
-
-    Ok(finalize_metadata(fallback_metadata(path), path))
+    Ok(None)
 }
 
 fn finalize_metadata(mut meta: ModMetadata, path: &Path) -> ModMetadata {
@@ -47,14 +76,6 @@ fn finalize_metadata(mut meta: ModMetadata, path: &Path) -> ModMetadata {
                     .map(|stem| split_name_and_version(stem).0)
                     .unwrap_or_else(|| "Unknown Mod".to_string())
             });
-    }
-    if meta.modrinth_url.is_none() {
-        if let Some(ref id) = meta.mod_id {
-            let id = id.trim();
-            if !id.is_empty() && !id.contains(' ') {
-                meta.modrinth_url = Some(modrinth_url_from_id(id));
-            }
-        }
     }
     meta
 }
@@ -89,12 +110,23 @@ fn try_parse_fabric(archive: &mut ZipArchive<std::fs::File>) -> Result<Option<Mo
     #[derive(Deserialize)]
     struct FabricMod {
         id: Option<String>,
+        provides: Option<Vec<String>>,
         name: Option<String>,
         version: Option<String>,
         description: Option<String>,
         authors: Option<Vec<FabricPerson>>,
         depends: Option<serde_json::Value>,
+        recommends: Option<serde_json::Value>,
         suggests: Option<serde_json::Value>,
+        breaks: Option<serde_json::Value>,
+        conflicts: Option<serde_json::Value>,
+        environment: Option<String>,
+        jars: Option<Vec<FabricEmbeddedJar>>,
+    }
+
+    #[derive(Deserialize)]
+    struct FabricEmbeddedJar {
+        file: String,
     }
 
     let parsed: FabricMod = serde_json::from_str(&fabric_json)?;
@@ -105,10 +137,25 @@ fn try_parse_fabric(archive: &mut ZipArchive<std::fs::File>) -> Result<Option<Mo
         .filter_map(FabricPerson::into_name)
         .collect();
 
-    let dependencies = extract_fabric_deps(parsed.depends, "depends")
-        .into_iter()
-        .chain(extract_fabric_deps(parsed.suggests, "suggests"))
-        .collect();
+    let mut dependencies = extract_fabric_deps(parsed.depends, "required");
+    dependencies.extend(extract_fabric_deps(parsed.recommends, "recommended"));
+    dependencies.extend(extract_fabric_deps(parsed.suggests, "suggested"));
+    dependencies.extend(extract_fabric_deps(parsed.breaks, "incompatible"));
+    dependencies.extend(extract_fabric_deps(parsed.conflicts, "conflicting"));
+    dependencies.extend(
+        parsed
+            .jars
+            .unwrap_or_default()
+            .into_iter()
+            .map(|jar| ModDependency {
+                mod_id: jar.file,
+                version_range: None,
+                kind: "embedded".to_string(),
+                side: None,
+            }),
+    );
+    dependencies
+        .sort_by(|left, right| (&left.kind, &left.mod_id).cmp(&(&right.kind, &right.mod_id)));
 
     Ok(Some(ModMetadata {
         name: parsed.name.unwrap_or_else(|| "Unknown Mod".to_string()),
@@ -117,8 +164,14 @@ fn try_parse_fabric(archive: &mut ZipArchive<std::fs::File>) -> Result<Option<Mo
         modrinth_url: None,
         dependencies,
         loader: LoaderKind::Fabric,
-        side: ModSide::Unknown,
+        side: match parsed.environment.as_deref() {
+            Some("client") => ModSide::Client,
+            Some("server") => ModSide::Server,
+            Some("*") => ModSide::Both,
+            _ => ModSide::Unknown,
+        },
         mod_id: parsed.id,
+        provided_mod_ids: parsed.provides.unwrap_or_default(),
         installed_modrinth_version_id: None,
         customized: false,
         name_is_fallback: false,
@@ -134,9 +187,17 @@ fn extract_fabric_deps(value: Option<serde_json::Value>, kind: &str) -> Vec<ModD
             mod_id,
             version_range: match version {
                 serde_json::Value::String(s) => Some(s),
+                serde_json::Value::Array(ranges) => Some(
+                    ranges
+                        .into_iter()
+                        .filter_map(|value| value.as_str().map(str::to_string))
+                        .collect::<Vec<_>>()
+                        .join(" || "),
+                ),
                 other => Some(other.to_string()),
             },
             kind: kind.to_string(),
+            side: None,
         })
         .collect()
 }
@@ -180,77 +241,109 @@ fn parse_mods_toml(content: &str, loader: LoaderKind) -> ModMetadata {
     let mut name = "Unknown Mod".to_string();
     let mut version = "?".to_string();
     let mut mod_id = None;
+    let mut provided_mod_ids = Vec::new();
     let mut authors = Vec::new();
-    let mut dependencies = Vec::new();
+    let mut dependency_records = Vec::<(String, ModDependency)>::new();
     let mut in_mods_block = false;
+    let mut primary_mod_block = false;
     let mut dependency_owner = None::<String>;
     let mut current_dependency = None::<ModDependency>;
 
     for line in content.lines() {
         let trimmed = line.trim();
-        if trimmed == "[[mods]]" {
-            in_mods_block = true;
-            if let Some(dependency) = current_dependency.take() {
-                dependencies.push(dependency);
+        if trimmed.starts_with("[[") {
+            if let (Some(owner), Some(dependency)) =
+                (dependency_owner.take(), current_dependency.take())
+            {
+                dependency_records.push((owner, dependency));
+            }
+            if trimmed == "[[mods]]" {
+                in_mods_block = true;
+                primary_mod_block = mod_id.is_none();
+            } else {
+                in_mods_block = false;
+                primary_mod_block = false;
+                dependency_owner = trimmed
+                    .strip_prefix("[[dependencies.")
+                    .and_then(|value| value.strip_suffix("]]"))
+                    .map(|owner| owner.trim().to_string());
+                if dependency_owner.is_some() {
+                    current_dependency = Some(ModDependency {
+                        mod_id: String::new(),
+                        version_range: None,
+                        kind: "required".to_string(),
+                        side: None,
+                    });
+                }
             }
             continue;
         }
-        if let Some(owner) = trimmed
-            .strip_prefix("[[dependencies.")
-            .and_then(|value| value.strip_suffix("]]"))
-        {
-            in_mods_block = false;
-            if let Some(dependency) = current_dependency.take() {
-                dependencies.push(dependency);
-            }
-            dependency_owner = Some(owner.trim().to_string());
-            current_dependency = Some(ModDependency {
-                mod_id: String::new(),
-                version_range: None,
-                kind: "required".to_string(),
-            });
+        let Some((key, value)) = trimmed.split_once('=') else {
             continue;
-        }
-        if trimmed.starts_with("[[") && trimmed != "[[mods]]" {
-            in_mods_block = false;
-        }
-        if let Some((key, value)) = trimmed.split_once('=') {
-            let key = key.trim();
-            let value = value.trim().trim_matches('"');
-            if in_mods_block {
-                match key {
-                    "modId" => mod_id = Some(value.to_string()),
-                    "displayName" => name = value.to_string(),
-                    "version" => version = value.to_string(),
-                    "authors" => {
-                        authors = value
-                            .trim_matches(|c| c == '"' || c == '\'')
-                            .split(',')
-                            .map(|s| s.trim().to_string())
-                            .filter(|s| !s.is_empty())
-                            .collect();
-                    }
-                    _ => {}
+        };
+        let key = key.trim();
+        let value = value.trim().trim_matches('"');
+        if in_mods_block {
+            match key {
+                "modId" if primary_mod_block => mod_id = Some(value.to_string()),
+                "modId" => provided_mod_ids.push(value.to_string()),
+                "displayName" if primary_mod_block => name = value.to_string(),
+                "version" if primary_mod_block => version = value.to_string(),
+                "authors" if primary_mod_block => {
+                    authors = value
+                        .trim_matches(|character| character == '"' || character == '\'')
+                        .split(',')
+                        .map(|author| author.trim().to_string())
+                        .filter(|author| !author.is_empty())
+                        .collect();
                 }
-            } else if dependency_owner.as_deref() == mod_id.as_deref() {
-                if let Some(dependency) = current_dependency.as_mut() {
-                    match key {
-                        "modId" => dependency.mod_id = value.to_string(),
-                        "type" => dependency.kind = value.to_string(),
-                        "versionRange" => dependency.version_range = Some(value.to_string()),
-                        _ => {}
+                _ => {}
+            }
+        } else if let Some(dependency) = current_dependency.as_mut() {
+            match key {
+                "modId" => dependency.mod_id = value.to_string(),
+                "type" => dependency.kind = value.to_ascii_lowercase(),
+                "mandatory" => {
+                    dependency.kind = if value.eq_ignore_ascii_case("false") {
+                        "optional"
+                    } else {
+                        "required"
+                    }
+                    .to_string()
+                }
+                "versionRange" => dependency.version_range = Some(value.to_string()),
+                "side" => {
+                    dependency.side = match value.to_ascii_lowercase().as_str() {
+                        "client" => Some(ModSide::Client),
+                        "server" => Some(ModSide::Server),
+                        "both" => Some(ModSide::Both),
+                        _ => None,
                     }
                 }
+                _ => {}
             }
         }
     }
 
-    if let Some(dependency) = current_dependency.take() {
-        dependencies.push(dependency);
+    if let (Some(owner), Some(dependency)) = (dependency_owner, current_dependency) {
+        dependency_records.push((owner, dependency));
     }
-    dependencies.retain(|dependency| !dependency.mod_id.trim().is_empty());
-
-    let loader = detect_toml_loader(content).unwrap_or(loader);
+    provided_mod_ids.retain(|provided| {
+        !provided.trim().is_empty() && Some(provided.as_str()) != mod_id.as_deref()
+    });
+    provided_mod_ids.sort();
+    provided_mod_ids.dedup();
+    let mut dependencies = dependency_records
+        .into_iter()
+        .filter(|(owner, dependency)| {
+            !dependency.mod_id.trim().is_empty()
+                && (Some(owner.as_str()) == mod_id.as_deref()
+                    || provided_mod_ids.iter().any(|provided| provided == owner))
+        })
+        .map(|(_, dependency)| dependency)
+        .collect::<Vec<_>>();
+    dependencies
+        .sort_by(|left, right| (&left.kind, &left.mod_id).cmp(&(&right.kind, &right.mod_id)));
 
     ModMetadata {
         name,
@@ -258,9 +351,10 @@ fn parse_mods_toml(content: &str, loader: LoaderKind) -> ModMetadata {
         authors,
         modrinth_url: None,
         dependencies,
-        loader,
+        loader: detect_toml_loader(content).unwrap_or(loader),
         side: ModSide::Unknown,
         mod_id,
+        provided_mod_ids,
         installed_modrinth_version_id: None,
         customized: false,
         name_is_fallback: false,
@@ -293,6 +387,7 @@ fn try_parse_legacy_mcmod(archive: &mut ZipArchive<std::fs::File>) -> Result<Opt
         loader: LoaderKind::Forge,
         side: ModSide::Unknown,
         mod_id: m.modid,
+        provided_mod_ids: vec![],
         installed_modrinth_version_id: None,
         customized: false,
         name_is_fallback: false,
@@ -336,6 +431,7 @@ pub fn fallback_metadata(path: &Path) -> ModMetadata {
         loader,
         side: ModSide::Unknown,
         mod_id: None,
+        provided_mod_ids: vec![],
         installed_modrinth_version_id: None,
         customized: false,
         name_is_fallback: true,
@@ -485,6 +581,7 @@ mod tests {
                 loader: LoaderKind::Fabric,
                 side: ModSide::Unknown,
                 mod_id: Some("example_mod".to_string()),
+                provided_mod_ids: vec![],
                 installed_modrinth_version_id: None,
                 customized: false,
                 name_is_fallback: false,
@@ -517,7 +614,7 @@ mod tests {
         );
         assert_eq!(
             split_name_and_version("ImmediatelyFast-Fabric-1.3.2+1.20.4"),
-            ("ImmediatelyFast".to_string(), "1.3.2+1.20.4".to_string())
+            ("Immediately Fast".to_string(), "1.3.2+1.20.4".to_string())
         );
     }
 

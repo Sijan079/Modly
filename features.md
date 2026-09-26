@@ -1,3 +1,7 @@
+# Historical feature notes
+
+These notes predate the current [product boundary](docs/PRODUCT.md) and [architecture phases](docs/architecture/phase-0.md). Treat them as history, not the active roadmap.
+
 Modly 1.2.2
 
 

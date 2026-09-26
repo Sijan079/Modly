@@ -4,11 +4,9 @@ use std::sync::OnceLock;
 use tauri::Manager;
 
 use crate::services::database::Database;
-use crate::services::launcher::LauncherService;
 
 pub struct AppState {
     pub db: Database,
-    pub launcher: LauncherService,
     pub app_data_dir: PathBuf,
 }
 
@@ -29,13 +27,8 @@ pub fn init_state(app_handle: &tauri::AppHandle) -> Result<(), String> {
             app_data_dir.display()
         )
     })?;
-    let launcher = LauncherService::new();
     APP_STATE
-        .set(AppState {
-            db,
-            launcher,
-            app_data_dir,
-        })
+        .set(AppState { db, app_data_dir })
         .map_err(|_| "App state already initialized".to_string())?;
     Ok(())
 }
