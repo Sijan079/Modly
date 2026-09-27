@@ -7,6 +7,10 @@ mod state;
 use tauri::Manager;
 
 use commands::categories::{create_category, delete_category, list_categories};
+use commands::change_plan::{
+    apply_mod_change, discard_mod_change_plan, list_mod_change_backups, preview_mod_change,
+    restore_mod_change,
+};
 use commands::files::{
     append_log, copy_file, delete_file, get_app_data_dir, hash_file_sha256, list_directory,
     list_logs, move_file, open_in_explorer,
@@ -16,11 +20,10 @@ use commands::instances::{
     export_mods_zip, get_instance, import_instance_zip, list_instances, update_instance,
 };
 use commands::mods::{
-    bulk_update_mod_metadata, check_mod_integrity, copy_mod_to_instance, delete_mod,
-    delete_mod_suggestion, export_mod_list_html, get_latest_mod_integrity_audit,
-    get_mod_truth_relationships, get_pack_truth, list_instance_relationship_graph,
-    list_mod_relationships, list_mod_suggestions, list_mods, parse_mod_metadata,
-    promote_mod_suggestion, reset_mod_metadata, scan_instance_mods, set_mod_enabled,
+    bulk_update_mod_metadata, check_mod_integrity, delete_mod_suggestion, export_mod_list_html,
+    get_latest_mod_integrity_audit, get_mod_truth_relationships, get_pack_health_integrity,
+    get_pack_truth, list_instance_relationship_graph, list_mod_relationships, list_mod_suggestions,
+    list_mods, parse_mod_metadata, reset_mod_metadata, scan_instance_mods, set_mod_enabled,
     toggle_mod_enabled, update_mod_metadata, upsert_mod_suggestion,
 };
 use commands::packs::{
@@ -30,14 +33,14 @@ use commands::scan::{get_default_minecraft_path, scan_default_minecraft, scan_mi
 use commands::scout::{
     analyze_scout_target, create_scout_instance_target, create_scout_target,
     discover_scout_candidates, get_latest_scout_analysis, get_scout_recommendations,
-    list_scout_targets, search_scout_candidates,
+    list_scout_recommendation_decisions, list_scout_targets, search_scout_candidates,
+    set_scout_recommendation_decision,
 };
 use commands::settings::{get_settings, save_settings};
 use commands::updates::{
     append_update_log, check_update_target, check_updates, confirm_update_match,
     get_latest_update_check, get_modrinth_project_details, get_modrinth_projects,
-    install_suggestion_from_modrinth, list_suggestion_modrinth_versions, list_update_targets,
-    save_update_check, update_mod_from_modrinth,
+    list_suggestion_modrinth_versions, list_update_targets, save_update_check,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -74,10 +77,17 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            preview_mod_change,
+            apply_mod_change,
+            discard_mod_change_plan,
+            list_mod_change_backups,
+            restore_mod_change,
             get_default_minecraft_path,
             scan_default_minecraft,
             scan_minecraft_path,
             list_scout_targets,
+            list_scout_recommendation_decisions,
+            set_scout_recommendation_decision,
             create_scout_target,
             create_scout_instance_target,
             analyze_scout_target,
@@ -102,13 +112,13 @@ pub fn run() {
             list_mod_suggestions,
             scan_instance_mods,
             get_pack_truth,
+            get_pack_health_integrity,
             get_mod_truth_relationships,
             check_mod_integrity,
             get_latest_mod_integrity_audit,
             parse_mod_metadata,
             set_mod_enabled,
             toggle_mod_enabled,
-            delete_mod,
             delete_mod_suggestion,
             update_mod_metadata,
             bulk_update_mod_metadata,
@@ -116,8 +126,6 @@ pub fn run() {
             list_mod_relationships,
             upsert_mod_suggestion,
             reset_mod_metadata,
-            promote_mod_suggestion,
-            copy_mod_to_instance,
             export_mod_list_html,
             list_pack_items,
             scan_pack_items,
@@ -148,11 +156,9 @@ pub fn run() {
             list_update_targets,
             check_update_target,
             confirm_update_match,
-            update_mod_from_modrinth,
             get_modrinth_projects,
             get_modrinth_project_details,
             list_suggestion_modrinth_versions,
-            install_suggestion_from_modrinth,
             append_update_log,
         ])
         .run(tauri::generate_context!())

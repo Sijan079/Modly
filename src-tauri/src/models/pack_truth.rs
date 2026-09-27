@@ -78,6 +78,13 @@ pub enum RelationshipResolution {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PackArchiveIssue {
+    pub file_path: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModTruthRelationships {
     pub file_path: String,
     pub outgoing: Vec<DeclaredRelationship>,

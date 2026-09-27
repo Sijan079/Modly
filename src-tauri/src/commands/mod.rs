@@ -1,4 +1,5 @@
 pub mod categories;
+pub mod change_plan;
 pub mod files;
 pub mod instances;
 pub mod mods;

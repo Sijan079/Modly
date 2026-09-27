@@ -219,10 +219,70 @@ export interface DeclaredRelationship {
   resolution: RelationshipResolution;
 }
 
+export interface PackArchiveIssue {
+  filePath: string;
+  message: string;
+}
+
 export interface PackTruth {
   instanceId: string;
   mods: ObservedMod[];
   relationships: DeclaredRelationship[];
+}
+
+export type ChangeKind = "add" | "update" | "remove" | "replace";
+
+export interface ChangeRequest {
+  kind: ChangeKind;
+  instanceId: string;
+  targetModId?: string | null;
+  sourcePath?: string | null;
+  downloadUrl?: string | null;
+  fileName?: string | null;
+  expectedSha256?: string | null;
+  versionId?: string | null;
+  suggestionId?: string | null;
+}
+
+export interface ChangePlan {
+  id: string;
+  kind: ChangeKind;
+  instanceId: string;
+  oldFilePath: string | null;
+  newFilePath: string | null;
+  sourceSha256: string | null;
+  candidate: ModMetadata | null;
+  truth: PackTruth;
+  directDependents: string[];
+  transitiveDependents: string[][];
+  backupPath: string | null;
+}
+
+export interface ChangeApplyResult {
+  instanceId: string;
+  kind: ChangeKind;
+  verified: boolean;
+  backupId: string | null;
+  modFile: ModFile | null;
+}
+
+export interface ChangeBackup {
+  id: string;
+  instanceId: string;
+  kind: ChangeKind;
+  createdAt: string;
+  status: string;
+  oldFilePath: string | null;
+  newFilePath: string | null;
+  oldMod: ModFile | null;
+  newMod: ModFile | null;
+}
+
+export interface ChangeRestoreResult {
+  instanceId: string;
+  backupId: string;
+  verified: boolean;
+  warnings: string[];
 }
 
 export interface ModTruthRelationships {
@@ -428,14 +488,6 @@ export interface ConfirmUpdateMatchInput {
   projectUrl: string;
 }
 
-export interface UpdateModFromModrinthInput {
-  modId: string;
-  versionId: string;
-  downloadUrl: string;
-  fileName: string;
-  expectedSha256: string | null;
-}
-
 export interface SuggestionVersionOption {
   versionId: string;
   versionNumber: string;
@@ -485,6 +537,7 @@ export interface ScoutInstalledMod {
   metadata: ModMetadata;
   classification: ScoutModClassification;
   hashSha512: string;
+  hashSha256?: string | null;
   providerMetadata: ScoutProviderMetadata | null;
 }
 
@@ -536,21 +589,35 @@ export interface CandidateSearchResult {
   recommendations: Recommendation[];
 }
 
-export type RecommendationStatus = "ADD" | "CONSIDER" | "SKIP";
-
 export interface Recommendation {
   candidate: CandidateMod;
-  score: number;
-  status: RecommendationStatus;
-  concerns: string[];
+  fit: { label: string; reason: string; matchingCategories: string[]; matchingGoalTerms: string[] };
+  availability: "matched" | "none" | "unknown";
+  versionEvidence: CandidateVersionEvidence | null;
+  evidenceWarning: string | null;
 }
 
-export interface InstallSuggestionFromModrinthInput {
-  suggestionId: string;
+export interface CandidateVersionEvidence {
   versionId: string;
-  downloadUrl: string;
-  fileName: string;
-  expectedSha256: string | null;
+  versionNumber: string;
+  publishedAt: string;
+  gameVersions: string[];
+  loaders: string[];
+  dependencies: CandidateDependency[];
+}
+
+export interface CandidateDependency {
+  projectId: string | null;
+  versionId: string | null;
+  fileName: string | null;
+  dependencyType: string;
+}
+
+export interface ScoutRecommendationDecision {
+  targetId: string;
+  projectId: string;
+  decision: "rejected";
+  updatedAt: string;
 }
 
 export interface ConfigTreeNode {

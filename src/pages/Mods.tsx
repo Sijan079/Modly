@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
@@ -13,10 +14,11 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ThemedSelect } from "@/components/ui/themed-select";
-import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { ChangePlanDialog } from "@/components/mods/ChangePlanDialog";
 import { PageShell } from "@/components/layout/PageShell";
 import { PageSearchBar } from "@/components/layout/PageSearchBar";
 import { PageToolbar } from "@/components/layout/PageToolbar";
@@ -29,7 +31,6 @@ import { CategoryManager } from "@/components/mods/CategoryManager";
 import { useInstances } from "@/hooks/useInstances";
 import {
   useCheckModIntegrity,
-  useDeleteMod,
   useLatestModIntegrityAudit,
   useMods,
   useResetModMetadata,
@@ -44,6 +45,7 @@ import { api } from "@/lib/api";
 import { buildExportDefaultPath } from "@/lib/export-paths";
 import type {
   ExportModsZipInput,
+  ChangeRequest,
   Instance,
   ModFile,
   ModIntegrityAudit,
@@ -85,6 +87,8 @@ function ModsWorkspace({
   setSelectedInstance: (id: string | null) => void;
 }) {
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const linkedPath = searchParams.get("mod");
   const selectedInstance = instances.find((instance) => instance.id === instanceId) ?? null;
 
   const { data: mods = [], isLoading } = useMods(instanceId);
@@ -93,7 +97,6 @@ function ModsWorkspace({
   const integrityMutation = useCheckModIntegrity();
   const { data: latestIntegrityAudit = null } = useLatestModIntegrityAudit(instanceId);
   const toggleMutation = useToggleMod();
-  const deleteMutation = useDeleteMod();
   const updateMetaMutation = useUpdateModMetadata();
   const bulkUpdateMetaMutation = useBulkUpdateModMetadata();
   const resetMetaMutation = useResetModMetadata();
@@ -108,10 +111,21 @@ function ModsWorkspace({
   const [selectedModIds, setSelectedModIds] = useState<string[]>([]);
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
-  const [pendingDeleteMod, setPendingDeleteMod] = useState<ModFile | null>(null);
+  const [changeRequests, setChangeRequests] = useState<ChangeRequest[]>([]);
+  const [backupsOpen, setBackupsOpen] = useState(false);
+  const [backups, setBackups] = useState<import("@/lib/types").ChangeBackup[]>([]);
+  const [restoreTarget, setRestoreTarget] = useState<import("@/lib/types").ChangeBackup | null>(null);
+  const [backupError, setBackupError] = useState<string | null>(null);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [activeIntegrityAudit, setActiveIntegrityAudit] = useState<ModIntegrityAudit | null>(null);
   const [dismissedAuditAt, setDismissedAuditAt] = useState<string | null>(null);
+  useEffect(() => {
+    if (!linkedPath || isLoading) return;
+    const mod = mods.find((item) => item.filePath === linkedPath);
+    setModSearch(mod?.fileName ?? linkedPath.split(/[\/]/).pop() ?? linkedPath);
+    if (mod) setEditingMod(mod);
+    setSearchParams((params) => { params.delete("mod"); return params; }, { replace: true });
+  }, [linkedPath, isLoading, mods, setSearchParams]);
 
   const filteredMods = useMemo(
     () => filterMods(mods, modSearch, filters),
@@ -161,26 +175,8 @@ function ModsWorkspace({
     });
     if (!files) return;
     const paths = Array.isArray(files) ? files : [files];
-    for (const path of paths) {
-      if (typeof path === "string") {
-        await api.mods.copyToInstance(path, instanceId);
-      }
-    }
-    const settings = await api.settings.get();
-    if (settings.autoScanAfterModAdd) {
-      scanMutation.mutate(instanceId, {
-        onSuccess: () => {
-          if (settings.autoAuditAfterScan) {
-            integrityMutation.mutate(instanceId, {
-              onSuccess: setActiveIntegrityAudit,
-            });
-          }
-        },
-      });
-    } else {
-      queryClient.invalidateQueries({ queryKey: ["mods", instanceId] });
-      queryClient.invalidateQueries({ queryKey: ["instances"] });
-    }
+    setChangeRequests(paths.filter((path): path is string => typeof path === "string")
+      .map((sourcePath) => ({ kind: "add", instanceId, sourcePath })));
   };
 
   const handleExportModList = async () => {
@@ -281,22 +277,32 @@ function ModsWorkspace({
   };
 
   const confirmDeleteMod = (mod: ModFile) => {
-    setPendingDeleteMod(mod);
+    setEditingMod(null);
+    setChangeRequests([{ kind: "remove", instanceId: mod.instanceId, targetModId: mod.id }]);
   };
-
-  const handleDeleteMod = () => {
-    if (!pendingDeleteMod) return;
-    deleteMutation.mutate(
-      { instanceId: pendingDeleteMod.instanceId, modId: pendingDeleteMod.id },
-      {
-        onSuccess: () => {
-          if (editingMod?.id === pendingDeleteMod.id) {
-            setEditingMod(null);
-          }
-          setPendingDeleteMod(null);
-        },
-      }
-    );
+  const replaceMod = async (mod: ModFile) => {
+    const sourcePath = await open({ multiple: false, filters: [{ name: "Mod JAR", extensions: ["jar"] }] });
+    if (typeof sourcePath === "string") setChangeRequests([{ kind: "replace", instanceId: mod.instanceId, targetModId: mod.id, sourcePath }]);
+  };
+  const showBackups = async () => {
+    if (!instanceId) return;
+    setToolsOpen(false);
+    setBackupError(null);
+    setRestoreTarget(null);
+    try { setBackups(await api.changes.backups(instanceId)); setBackupsOpen(true); }
+    catch (error) { setBackupError(String(error)); setBackupsOpen(true); }
+  };
+  const restoreBackup = async (id: string) => {
+    if (!instanceId) return;
+    setBackupError(null);
+    try {
+      const result = await api.changes.restore(instanceId, id);
+      if (!result.verified) throw new Error("Restore verification failed");
+      setBackups(await api.changes.backups(instanceId));
+      setRestoreTarget(null);
+      await queryClient.invalidateQueries();
+      setBackupError(result.warnings.join(" ") || null);
+    } catch (error) { setBackupError(String(error)); }
   };
 
   const description =
@@ -376,6 +382,7 @@ function ModsWorkspace({
                     disabled={!instanceId || mods.length === 0 || exportZipMutation.isPending}
                     onClick={handleOpenExportModsZip}
                   />
+                  <ToolMenuItem icon={RefreshCw} label="Restore mod change" disabled={!instanceId} onClick={showBackups} />
                 </div>
               )}
             </div>
@@ -459,6 +466,7 @@ function ModsWorkspace({
             }
           }}
           onDelete={confirmDeleteMod}
+          onReplace={replaceMod}
           selectedModIds={selectedModIds}
           onSelectionChange={(modId, selected) => {
             setSelectedModIds((current) =>
@@ -476,18 +484,16 @@ function ModsWorkspace({
         />
       </div>
 
-      <ConfirmDialog
-        open={pendingDeleteMod !== null}
-        title="Delete mod"
-        description={`Delete "${pendingDeleteMod?.metadata?.name ?? pendingDeleteMod?.fileName ?? ""}"?\n\nThis removes the mod file from disk and clears its saved metadata.`}
-        confirmLabel="Delete Mod"
-        onConfirm={handleDeleteMod}
-        onOpenChange={(open) => {
-          if (!open) {
-            setPendingDeleteMod(null);
-          }
-        }}
-      />
+      {changeRequests.length > 0 && <ChangePlanDialog requests={changeRequests} instance={selectedInstance} onClose={() => setChangeRequests([])} onApplied={() => { void queryClient.invalidateQueries(); }} />}
+      <Dialog open={backupsOpen} onOpenChange={(open) => { setBackupsOpen(open); if (!open) setRestoreTarget(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>Restore mod change</DialogTitle><DialogDescription>Choose an applied change to restore its original JAR and saved metadata.</DialogDescription></DialogHeader>
+          {backupError && <p role="alert" className="text-sm text-[var(--color-destructive)]">{backupError}</p>}
+          {backups.length === 0 && <p className="text-sm text-[var(--color-muted-foreground)]">No restorable changes.</p>}
+          {backups.map((backup) => <div key={backup.id} className="flex items-center justify-between gap-3 border-t border-[var(--color-border)] py-2 text-sm"><span>{backup.kind} · {backup.oldMod?.fileName ?? backup.newMod?.fileName}<br />{new Date(backup.createdAt).toLocaleString()}</span><Button variant="outline" onClick={() => setRestoreTarget(backup)}>Review</Button></div>)}
+          {restoreTarget && <div className="space-y-2 rounded-md border border-[var(--color-border)] p-3 text-sm"><strong>Restore {restoreTarget.oldMod?.fileName ?? restoreTarget.newMod?.fileName}</strong>{restoreTarget.newFilePath && <p>Remove current file: <code className="break-all">{restoreTarget.newFilePath}</code></p>}{restoreTarget.oldFilePath && <p>Restore original file: <code className="break-all">{restoreTarget.oldFilePath}</code></p>}<p className="text-[var(--color-muted-foreground)]">Current files must still match this backup. Dependency and world safety require review after restoration.</p><div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setRestoreTarget(null)}>Cancel</Button><Button onClick={() => restoreBackup(restoreTarget.id)}>Restore original</Button></div></div>}
+        </DialogContent>
+      </Dialog>
 
       <ModEditDialog
         mod={editingMod}

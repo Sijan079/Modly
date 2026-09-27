@@ -1,4 +1,5 @@
 pub mod category;
+pub mod change_plan;
 pub mod instance;
 pub mod mod_metadata;
 pub mod pack_item;

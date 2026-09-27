@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { ThemedSelect } from "@/components/ui/themed-select";
 import { Card, CardContent } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { ChangePlanDialog } from "@/components/mods/ChangePlanDialog";
 import {
   Dialog,
   DialogContent,
@@ -26,12 +27,10 @@ import { useCategories } from "@/hooks/useCategories";
 import { useInstances } from "@/hooks/useInstances";
 import {
   useDeleteModSuggestion,
-  useInstallSuggestion,
   useModrinthProjectDetails,
   useModrinthProjects,
   useMods,
   useModSuggestions,
-  usePromoteModSuggestion,
   useSuggestionVersions,
   useUpsertModSuggestion,
 } from "@/hooks/useMods";
@@ -44,6 +43,7 @@ import type {
   ModrinthProjectSummary,
   ModSuggestion,
   SuggestionVersionOption,
+  ChangeRequest,
 } from "@/lib/types";
 import { formatDate, formatLoader } from "@/lib/utils";
 import { normalizeSourceUrl, parseModSourceUrl } from "@/lib/mod-source-url";
@@ -115,9 +115,8 @@ export function ModSuggestionsPage() {
   const { data: categories = [] } = useCategories(instanceId);
   const upsertSuggestion = useUpsertModSuggestion();
   const deleteSuggestion = useDeleteModSuggestion();
-  const promoteSuggestion = usePromoteModSuggestion();
   const suggestionVersions = useSuggestionVersions();
-  const installSuggestion = useInstallSuggestion();
+  const [changeRequests, setChangeRequests] = useState<ChangeRequest[]>([]);
 
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState<ModListFilters>(defaultFilters);
@@ -216,12 +215,7 @@ export function ModSuggestionsPage() {
     if (source?.platform !== "modrinth") {
       if (suggestion.filePath) {
         if (!instanceId) return;
-        promoteSuggestion.mutate(
-          { instanceId, suggestionId: suggestion.id },
-          {
-            onSuccess: () => showToast("Suggestion installed."),
-          }
-        );
+        setChangeRequests([{ kind: "add", instanceId, suggestionId: suggestion.id, sourcePath: suggestion.filePath }]);
         return;
       }
       openInstallState(
@@ -299,20 +293,11 @@ export function ModSuggestionsPage() {
     );
 
     if (chosen) {
-      await installSuggestion.mutateAsync({
-        suggestionId: installState.target.id,
-        versionId: chosen.versionId,
-        downloadUrl: chosen.downloadUrl,
-        fileName: chosen.fileName,
-        expectedSha256: chosen.expectedSha256,
-      });
-      showToast("Suggestion installed.");
+      setChangeRequests([{ kind: "add", instanceId, suggestionId: installState.target.id,
+        versionId: chosen.versionId, downloadUrl: chosen.downloadUrl,
+        fileName: chosen.fileName, expectedSha256: chosen.expectedSha256 }]);
     } else if (installState.target.filePath) {
-      await promoteSuggestion.mutateAsync({
-        instanceId,
-        suggestionId: installState.target.id,
-      });
-      showToast("Suggestion installed.");
+      setChangeRequests([{ kind: "add", instanceId, suggestionId: installState.target.id, sourcePath: installState.target.filePath }]);
     } else {
       setInstallState((current) => ({
         ...current,
@@ -444,7 +429,7 @@ export function ModSuggestionsPage() {
     <div className="flex flex-col gap-5">
       <PageShell
         title="Mod Suggestions"
-        description={`Stage mods to check or download later - ${filteredSuggestions.length} of ${suggestions.length} shown${matchedSuggestionCount > 0 ? ` · ${matchedSuggestionCount} already installed` : ""}`}
+        description={`Save projects from Scout or add your own to review before installation - ${filteredSuggestions.length} of ${suggestions.length} shown${matchedSuggestionCount > 0 ? ` · ${matchedSuggestionCount} already installed` : ""}`}
         controls={
           <>
             <ThemedSelect
@@ -513,13 +498,7 @@ export function ModSuggestionsPage() {
             suggestionMatches={suggestionMatches}
             loading={isLoading}
             selectedId={selectedId}
-            promotingId={
-              promoteSuggestion.isPending
-                ? promoteSuggestion.variables?.suggestionId ?? null
-                : installSuggestion.isPending
-                  ? installSuggestion.variables?.suggestionId ?? null
-                  : null
-            }
+            promotingId={null}
             onSelect={setSelectedId}
             onEdit={editSuggestion}
             onPromote={openInstallDialog}
@@ -837,16 +816,16 @@ export function ModSuggestionsPage() {
               onClick={() => void confirmInstallSuggestion()}
               disabled={
                 !installState.target ||
-                promoteSuggestion.isPending ||
-                installSuggestion.isPending ||
                 (!installState.selectedVersionId && !installState.target.filePath)
               }
             >
-              {promoteSuggestion.isPending || installSuggestion.isPending ? "Installing..." : "Install"}
+              Install
             </Button>
           </div>
         </DialogContent>
       </Dialog>
+
+      {changeRequests.length > 0 && <ChangePlanDialog requests={changeRequests} instance={selectedInstance} onClose={() => setChangeRequests([])} onApplied={() => showToast("Suggestion installed.")} />}
 
       {toast && (
         <div className="pointer-events-none fixed right-5 top-5 z-50 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-4 py-3 text-sm text-[var(--color-foreground)] shadow-xl">

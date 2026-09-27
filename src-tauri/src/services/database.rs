@@ -9,6 +9,7 @@ use uuid::Uuid;
 use crate::models::category::{
     CreateCategoryInput, DeleteCategoryInput, DeleteCategoryMode, InstanceCategory,
 };
+use crate::models::change_plan::{ChangeBackup, ManualEdgeBackup};
 use crate::models::instance::{CreateInstanceInput, Instance, LoaderType, UpdateInstanceInput};
 use crate::models::mod_metadata::{
     BulkUpdateModMetadataInput, ModFile, ModIntegrityAudit, ModIntegrityAuditStatus,
@@ -17,7 +18,7 @@ use crate::models::mod_metadata::{
     UpdateModMetadataInput, UpdateModRelationshipInput, UpsertModSuggestionInput,
 };
 use crate::models::pack_item::{PackItem, PackItemMetadata, PackType, UpdatePackItemMetadataInput};
-use crate::models::scout::{ScoutAnalysis, ScoutTarget};
+use crate::models::scout::{ScoutAnalysis, ScoutRecommendationDecision, ScoutTarget};
 use crate::models::settings::AppSettings;
 use crate::models::updates::{SavedUpdateCheck, UpdateRow};
 
@@ -156,6 +157,14 @@ CREATE TABLE IF NOT EXISTS scout_provider_cache (
     cache_key TEXT PRIMARY KEY NOT NULL,
     response_json TEXT NOT NULL,
     fetched_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS scout_recommendation_decisions (
+    target_id TEXT NOT NULL REFERENCES scout_targets(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL,
+    decision TEXT NOT NULL CHECK(decision = 'rejected'),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (target_id, project_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_mods_instance ON mods(instance_id);
@@ -382,6 +391,47 @@ impl Database {
              ON CONFLICT(cache_key) DO UPDATE SET response_json = excluded.response_json, fetched_at = excluded.fetched_at",
             params![cache_key, response_json, fetched_at],
         )?;
+        Ok(())
+    }
+
+    pub fn list_scout_recommendation_decisions(
+        &self,
+        target_id: &str,
+    ) -> Result<Vec<ScoutRecommendationDecision>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mut statement = conn.prepare(
+            "SELECT target_id, project_id, decision, updated_at FROM scout_recommendation_decisions WHERE target_id = ?1 ORDER BY updated_at DESC"
+        )?;
+        let rows = statement.query_map(params![target_id], |row| {
+            Ok(ScoutRecommendationDecision {
+                target_id: row.get(0)?,
+                project_id: row.get(1)?,
+                decision: row.get(2)?,
+                updated_at: row.get(3)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn set_scout_recommendation_decision(
+        &self,
+        target_id: &str,
+        project_id: &str,
+        decision: &str,
+    ) -> Result<()> {
+        if project_id.trim().is_empty() || !matches!(decision, "rejected" | "clear") {
+            anyhow::bail!("Invalid recommendation decision");
+        }
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        if decision == "clear" {
+            conn.execute("DELETE FROM scout_recommendation_decisions WHERE target_id = ?1 AND project_id = ?2", params![target_id, project_id])?;
+        } else {
+            conn.execute(
+                "INSERT INTO scout_recommendation_decisions (target_id, project_id, decision, updated_at) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(target_id, project_id) DO UPDATE SET decision = excluded.decision, updated_at = excluded.updated_at",
+                params![target_id, project_id, decision, chrono::Utc::now().to_rfc3339()],
+            )?;
+        }
         Ok(())
     }
 
@@ -1585,6 +1635,232 @@ impl Database {
         Ok(rows.next().transpose()?)
     }
 
+    pub fn capture_mod_edges(&self, mod_id: &str) -> Result<Vec<ManualEdgeBackup>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mut stmt = conn.prepare(
+            "SELECT source_mod_id, target_mod_id, relationship_type FROM mod_relationships
+             WHERE source_mod_id = ?1 OR target_mod_id = ?1",
+        )?;
+        let edges = stmt.query_map(params![mod_id], |row| {
+            Ok(ManualEdgeBackup {
+                source_mod_id: row.get(0)?,
+                target_mod_id: row.get(1)?,
+                relationship_type: row.get(2)?,
+            })
+        })?;
+        edges.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn apply_change_record(
+        &self,
+        old: Option<&ModFile>,
+        new: Option<&ModFile>,
+        suggestion: Option<&ModSuggestion>,
+    ) -> Result<()> {
+        let mut conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let tx = conn.transaction()?;
+        match (old, new) {
+            (Some(old), Some(new)) => {
+                let metadata_json = new
+                    .metadata
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()?;
+                let changed = tx.execute(
+                    "UPDATE mods SET file_name = ?1, file_path = ?2, installed_at = ?3,
+                     enabled = ?4, hash_sha256 = ?5, source_url = ?6, metadata_json = ?7
+                     WHERE id = ?8 AND instance_id = ?9 AND file_path = ?10",
+                    params![
+                        new.file_name,
+                        new.file_path,
+                        new.installed_at,
+                        new.enabled as i32,
+                        new.hash_sha256,
+                        new.source_url,
+                        metadata_json,
+                        old.id,
+                        old.instance_id,
+                        old.file_path
+                    ],
+                )?;
+                if changed != 1 {
+                    anyhow::bail!("Mod record changed since preview");
+                }
+            }
+            (Some(old), None) => {
+                let changed = tx.execute(
+                    "DELETE FROM mods WHERE id = ?1 AND instance_id = ?2 AND file_path = ?3",
+                    params![old.id, old.instance_id, old.file_path],
+                )?;
+                if changed != 1 {
+                    anyhow::bail!("Mod record changed since preview");
+                }
+            }
+            (None, Some(new)) => {
+                let metadata_json = new
+                    .metadata
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()?;
+                tx.execute(
+                    "INSERT INTO mods (id, instance_id, file_name, file_path, installed_at,
+                     enabled, hash_sha256, source_url, metadata_json)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    params![
+                        new.id,
+                        new.instance_id,
+                        new.file_name,
+                        new.file_path,
+                        new.installed_at,
+                        new.enabled as i32,
+                        new.hash_sha256,
+                        new.source_url,
+                        metadata_json
+                    ],
+                )?;
+                for category in &new.categories {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO mod_category_tags (mod_id, category_id) VALUES (?1, ?2)",
+                        params![new.id, category.id],
+                    )?;
+                }
+            }
+            (None, None) => anyhow::bail!("Change has no mod record"),
+        }
+        if let Some(suggestion) = suggestion {
+            let changed = tx.execute(
+                "DELETE FROM mod_suggestions WHERE id = ?1 AND instance_id = ?2",
+                params![suggestion.id, suggestion.instance_id],
+            )?;
+            if changed != 1 {
+                anyhow::bail!("Suggestion changed since preview");
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn restore_change_record(&self, backup: &ChangeBackup) -> Result<usize> {
+        let mut conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let tx = conn.transaction()?;
+        match (&backup.old_mod, &backup.new_mod) {
+            (None, Some(new)) => {
+                let changed = tx.execute(
+                    "DELETE FROM mods WHERE id = ?1 AND file_path = ?2",
+                    params![new.id, new.file_path],
+                )?;
+                if changed != 1 {
+                    anyhow::bail!("Installed mod record changed since backup");
+                }
+            }
+            (Some(old), Some(new)) => {
+                let metadata_json = old
+                    .metadata
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()?;
+                let changed = tx.execute(
+                    "UPDATE mods SET file_name = ?1, file_path = ?2, installed_at = ?3,
+                     enabled = ?4, hash_sha256 = ?5, source_url = ?6, metadata_json = ?7
+                     WHERE id = ?8 AND file_path = ?9",
+                    params![
+                        old.file_name,
+                        old.file_path,
+                        old.installed_at,
+                        old.enabled as i32,
+                        old.hash_sha256,
+                        old.source_url,
+                        metadata_json,
+                        old.id,
+                        new.file_path
+                    ],
+                )?;
+                if changed != 1 {
+                    anyhow::bail!("Updated mod record changed since backup");
+                }
+            }
+            (Some(old), None) => {
+                let metadata_json = old
+                    .metadata
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()?;
+                tx.execute(
+                    "INSERT INTO mods (id, instance_id, file_name, file_path, installed_at,
+                     enabled, hash_sha256, source_url, metadata_json)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    params![
+                        old.id,
+                        old.instance_id,
+                        old.file_name,
+                        old.file_path,
+                        old.installed_at,
+                        old.enabled as i32,
+                        old.hash_sha256,
+                        old.source_url,
+                        metadata_json
+                    ],
+                )?;
+                for category in &old.categories {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO mod_category_tags (mod_id, category_id) VALUES (?1, ?2)",
+                        params![old.id, category.id],
+                    )?;
+                }
+            }
+            (None, None) => anyhow::bail!("Backup has no mod record"),
+        }
+        let mut restored_edges = 0;
+        if backup.old_mod.is_some() && backup.new_mod.is_none() {
+            for edge in &backup.manual_edges {
+                restored_edges += tx.execute(
+                    "INSERT OR IGNORE INTO mod_relationships (id, instance_id, source_mod_id,
+                     target_mod_id, relationship_type, created_at)
+                     SELECT ?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP
+                     WHERE EXISTS (SELECT 1 FROM mods WHERE id = ?3)
+                       AND EXISTS (SELECT 1 FROM mods WHERE id = ?4)",
+                    params![
+                        Uuid::new_v4().to_string(),
+                        backup.instance_id,
+                        edge.source_mod_id,
+                        edge.target_mod_id,
+                        edge.relationship_type
+                    ],
+                )?;
+            }
+        }
+        if let Some(suggestion) = &backup.suggestion {
+            let metadata_json = suggestion
+                .metadata
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()?;
+            tx.execute(
+                "INSERT INTO mod_suggestions (id, instance_id, file_name, file_path, enabled,
+                 hash_sha256, source_url, metadata_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    suggestion.id,
+                    suggestion.instance_id,
+                    suggestion.file_name,
+                    suggestion.file_path,
+                    suggestion.enabled as i32,
+                    suggestion.hash_sha256,
+                    suggestion.source_url,
+                    metadata_json
+                ],
+            )?;
+            for category in &suggestion.categories {
+                tx.execute(
+                    "INSERT OR IGNORE INTO mod_suggestion_category_tags (suggestion_id, category_id)
+                     VALUES (?1, ?2)",
+                    params![suggestion.id, category.id],
+                )?;
+            }
+        }
+        tx.commit()?;
+        Ok(restored_edges)
+    }
+
     pub fn delete_mod(&self, mod_id: &str) -> Result<()> {
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
         conn.execute("DELETE FROM mods WHERE id = ?1", params![mod_id])?;
@@ -2412,5 +2688,41 @@ mod tests {
                 && edge.target_mod_id == "manual-target"
                 && edge.relationship_type == ModRelationshipType::Dependency
         }));
+    }
+
+    #[test]
+    fn scout_rejections_are_scoped_to_project_and_target() {
+        let db = test_db();
+        let first = db
+            .upsert_scout_target("first".into(), "first/mods".into(), None)
+            .unwrap();
+        let second = db
+            .upsert_scout_target("second".into(), "second/mods".into(), None)
+            .unwrap();
+        db.set_scout_recommendation_decision(&first.id, "project-a", "rejected")
+            .unwrap();
+        assert_eq!(
+            db.list_scout_recommendation_decisions(&first.id)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(db
+            .list_scout_recommendation_decisions(&second.id)
+            .unwrap()
+            .is_empty());
+        db.set_scout_recommendation_decision(&first.id, "project-b", "rejected")
+            .unwrap();
+        assert_eq!(
+            db.list_scout_recommendation_decisions(&first.id)
+                .unwrap()
+                .len(),
+            2
+        );
+        db.set_scout_recommendation_decision(&first.id, "project-a", "clear")
+            .unwrap();
+        let remaining = db.list_scout_recommendation_decisions(&first.id).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].project_id, "project-b");
     }
 }

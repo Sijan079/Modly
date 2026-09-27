@@ -97,20 +97,6 @@ export function useDeleteModSuggestion() {
   });
 }
 
-export function usePromoteModSuggestion() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ instanceId: _instanceId, suggestionId }: { instanceId: string; suggestionId: string }) =>
-      api.mods.promoteSuggestion(suggestionId),
-    onSuccess: (_mod, { instanceId }) => {
-      qc.invalidateQueries({ queryKey: ["mod-suggestions", instanceId] });
-      qc.invalidateQueries({ queryKey: ["mods", instanceId] });
-      qc.invalidateQueries({ queryKey: ["instances"] });
-      qc.invalidateQueries({ queryKey: ["categories", instanceId] });
-    },
-  });
-}
-
 export function useSuggestionVersions() {
   return useMutation({
     mutationFn: ({
@@ -122,19 +108,6 @@ export function useSuggestionVersions() {
       gameVersion?: string | null;
       loader?: string | null;
     }) => api.updates.listSuggestionVersions(suggestionId, gameVersion, loader),
-  });
-}
-
-export function useInstallSuggestion() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: api.updates.installSuggestion,
-    onSuccess: (mod) => {
-      qc.invalidateQueries({ queryKey: ["mod-suggestions", mod.instanceId] });
-      qc.invalidateQueries({ queryKey: ["mods", mod.instanceId] });
-      qc.invalidateQueries({ queryKey: ["instances"] });
-      qc.invalidateQueries({ queryKey: ["categories", mod.instanceId] });
-    },
   });
 }
 
@@ -154,19 +127,6 @@ export function useModrinthProjectDetails(projectId: string | null) {
     queryFn: () => (projectId ? api.updates.modrinthProjectDetails(projectId) : null),
     enabled: !!projectId,
     staleTime: 1000 * 60 * 30,
-  });
-}
-
-export function useDeleteMod() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ instanceId: _instanceId, modId }: { instanceId: string; modId: string }) =>
-      api.mods.delete(modId),
-    onSuccess: (_, { instanceId }) => {
-      qc.invalidateQueries({ queryKey: ["mods", instanceId] });
-      qc.invalidateQueries({ queryKey: ["instances"] });
-      qc.invalidateQueries({ queryKey: ["mod-integrity-audit", instanceId] });
-    },
   });
 }
 

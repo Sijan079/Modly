@@ -24,9 +24,9 @@ import { PlatformLinkButton } from "@/components/ui/platform-link-button";
 import { Progress } from "@/components/ui/progress";
 import { TableSkeleton } from "@/components/ui/skeleton";
 import { useInstances } from "@/hooks/useInstances";
+import { ChangePlanDialog } from "@/components/mods/ChangePlanDialog";
 import {
   useConfirmUpdateMatch,
-  useUpdateModFromModrinth,
 } from "@/hooks/useUpdates";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/store/app";
@@ -36,6 +36,7 @@ import type {
   UpdateRow,
   UpdateStatus,
   UpdateTarget,
+  ChangeRequest,
 } from "@/lib/types";
 
 type StatusFilter = "all" | UpdateStatus;
@@ -45,13 +46,6 @@ type CheckProgress = {
   total: number;
   fileName: string;
 };
-type UpdateProgress = {
-  active: boolean;
-  current: number;
-  total: number;
-  fileName: string;
-  label: string;
-};
 
 export function UpdatesPage() {
   const { data: instances = [] } = useInstances();
@@ -59,7 +53,6 @@ export function UpdatesPage() {
   const instanceId = selectedInstanceId ?? instances[0]?.id ?? null;
   const selectedInstance = instances.find((instance) => instance.id === instanceId) ?? null;
   const confirmMatch = useConfirmUpdateMatch();
-  const updateMod = useUpdateModFromModrinth();
   const cancelCheckRef = useRef(false);
 
   const [rows, setRows] = useState<UpdateRow[]>([]);
@@ -75,15 +68,9 @@ export function UpdatesPage() {
     total: 0,
     fileName: "",
   });
-  const [updateProgress, setUpdateProgress] = useState<UpdateProgress>({
-    active: false,
-    current: 0,
-    total: 0,
-    fileName: "",
-    label: "",
-  });
   const [runError, setRunError] = useState<string | null>(null);
   const [loadingSavedCheck, setLoadingSavedCheck] = useState(true);
+  const [changeRequests, setChangeRequests] = useState<ChangeRequest[]>([]);
 
   const filteredRows = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -152,7 +139,7 @@ export function UpdatesPage() {
   }, [instanceId]);
 
   const handleCheck = async () => {
-    if (!instanceId || checkProgress.active || updateProgress.active) return;
+    if (!instanceId || checkProgress.active) return;
 
     cancelCheckRef.current = false;
     setRunError(null);
@@ -234,81 +221,14 @@ export function UpdatesPage() {
     );
   };
 
-  const handleUpdateRows = async (targets: UpdateRow[]) => {
-    const updateable = targets.filter(
-      (row) => canReplaceArtifact(row)
-    );
-    if (updateable.length === 0) return;
-    setRunError(null);
-    setUpdateProgress({
-      active: true,
-      current: 0,
-      total: updateable.length,
-      fileName: updateable[0].fileName,
-      label: updateable.length === 1 ? "Updating content" : "Updating selected content",
-    });
-
-    try {
-      for (let index = 0; index < updateable.length; index += 1) {
-        const row = updateable[index];
-        if (!row.latestFile) continue;
-        setUpdateProgress({
-          active: true,
-          current: index,
-          total: updateable.length,
-          fileName: row.fileName,
-          label: updateable.length === 1 ? "Updating content" : "Updating selected content",
-        });
-        await updateMod.mutateAsync({
-          modId: row.itemId,
-          versionId: row.latestVersionId!,
-          downloadUrl: row.latestFile.url,
-          fileName: row.latestFile.fileName,
-          expectedSha256: row.latestFile.sha256,
-        });
-      }
-
-      if (instanceId && updateable.length > 1) {
-        await api.updates.log(
-          instanceId,
-          "info",
-          `Updated content: ${updateable.map((row) => row.fileName).join(", ")}`
-        );
-      }
-
-      if (instanceId) {
-        const freshTargets = await api.updates.listTargets(instanceId);
-        const refreshed = await Promise.all(
-          freshTargets.map((target) =>
-            api.updates.checkTarget({
-              instanceId,
-              itemId: target.itemId,
-            })
-          )
-        );
-        const saved = await api.updates.saveCheck(instanceId, refreshed);
-        setRows(saved.rows);
-        setLastCheckedAt(saved.checkedAt);
-      } else {
-        setRows((current) => current.filter((row) => !selectedIds.has(row.itemId)));
-      }
-      setSelectedIds(new Set());
-      setActiveRow(null);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setRunError(message);
-      if (instanceId) {
-        await api.updates.log(instanceId, "error", `Content update failed: ${message}`);
-      }
-    } finally {
-      setUpdateProgress({
-        active: false,
-        current: 0,
-        total: 0,
-        fileName: "",
-        label: "",
-      });
-    }
+  const handleUpdateRows = (targets: UpdateRow[]) => {
+    if (!instanceId) return;
+    setActiveRow(null);
+    setChangeRequests(targets.filter(canReplaceArtifact).map((row) => ({
+      kind: "update", instanceId, targetModId: row.itemId,
+      downloadUrl: row.latestFile!.url, fileName: row.latestFile!.fileName,
+      expectedSha256: row.latestFile!.sha256, versionId: row.latestVersionId,
+    })));
   };
 
   const toggleSelected = (row: UpdateRow, checked: boolean) => {
@@ -339,12 +259,12 @@ export function UpdatesPage() {
               value={instanceId ?? ""}
               onValueChange={(value) => setSelectedInstance(value || null)}
               aria-label="Select instance"
-              disabled={checkProgress.active || updateProgress.active}
+              disabled={checkProgress.active}
               options={[{ value: "", label: "Select instance" }, ...instances.map((instance) => ({ value: instance.id, label: instance.name }))]}
             />
             <Button
               variant="outline"
-              disabled={!selectedInstance || checkProgress.active || updateProgress.active}
+              disabled={!selectedInstance || checkProgress.active}
               onClick={handleCheck}
             >
               <RefreshCw className={`h-4 w-4 ${checkProgress.active ? "animate-spin" : ""}`} />
@@ -352,7 +272,7 @@ export function UpdatesPage() {
             </Button>
             {selectedRows.length > 0 && (
               <Button
-                disabled={checkProgress.active || updateProgress.active}
+                disabled={checkProgress.active}
                 onClick={() => handleUpdateRows(selectedRows)}
               >
                 <Download className="h-4 w-4" />
@@ -386,7 +306,7 @@ export function UpdatesPage() {
               value={statusFilter}
               onValueChange={(value) => setStatusFilter(value as StatusFilter)}
               aria-label="Filter update status"
-              disabled={checkProgress.active || updateProgress.active}
+              disabled={checkProgress.active}
               options={[{ value: "all", label: "All statuses" }, { value: "updateAvailable", label: "Update available" }, { value: "upToDate", label: "Up to date" }, { value: "unknown", label: "Unknown" }, { value: "error", label: "Error" }]}
             />
             <span className="text-sm text-[var(--color-muted-foreground)]">
@@ -401,7 +321,7 @@ export function UpdatesPage() {
         loading={loadingSavedCheck}
         checked={checked}
         selectedIds={selectedIds}
-        busy={checkProgress.active || updateProgress.active}
+        busy={checkProgress.active}
         onToggle={toggleSelected}
         onConfirm={handleConfirm}
         onOpenDetails={setActiveRow}
@@ -409,11 +329,13 @@ export function UpdatesPage() {
 
       <UpdateDetailsDialog
         row={activeRow}
-        updating={updateProgress.active}
         onClose={() => setActiveRow(null)}
         onConfirm={handleConfirm}
         onUpdate={(row) => handleUpdateRows([row])}
       />
+      {changeRequests.length > 0 && <ChangePlanDialog requests={changeRequests} instance={selectedInstance} onClose={() => { setChangeRequests([]); setSelectedIds(new Set()); setActiveRow(null); }} onApplied={() => {
+        if (instanceId) void api.updates.listTargets(instanceId).then((targets) => Promise.all(targets.map((target) => api.updates.checkTarget({ instanceId, itemId: target.itemId })))).then((fresh) => api.updates.saveCheck(instanceId, fresh)).then((saved) => { setRows(saved.rows); setLastCheckedAt(saved.checkedAt); }).catch((error) => setRunError(String(error)));
+      }} />}
 
       <ProgressOverlay
         open={checkProgress.active}
@@ -426,14 +348,6 @@ export function UpdatesPage() {
         onCancel={handleCancelCheck}
       />
 
-      <ProgressOverlay
-        open={updateProgress.active}
-        title={updateProgress.label || "Updating content"}
-        description="Downloading verified files and moving previous versions to backup. Keep the app open."
-        current={updateProgress.current}
-        total={updateProgress.total}
-        fileName={updateProgress.fileName}
-      />
     </div>
   );
 }
@@ -560,13 +474,11 @@ function UpdatesTable({
 
 function UpdateDetailsDialog({
   row,
-  updating,
   onClose,
   onConfirm,
   onUpdate,
 }: {
   row: UpdateRow | null;
-  updating: boolean;
   onClose: () => void;
   onConfirm: (row: UpdateRow, candidate: UpdateCandidate) => void;
   onUpdate: (row: UpdateRow) => void;
@@ -597,7 +509,7 @@ function UpdateDetailsDialog({
                   )}
                   <Button
                     size="sm"
-                    disabled={!canUpdate || updating}
+                    disabled={!canUpdate}
                     onClick={() => onUpdate(row)}
                   >
                     <Download className="h-4 w-4" />

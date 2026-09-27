@@ -1,16 +1,46 @@
 use std::collections::HashMap;
+use std::io;
 use std::path::Path;
+use zip::ZipArchive;
 
 use anyhow::Result;
 
 use crate::models::mod_metadata::ModFile;
 use crate::models::pack_truth::{
-    DeclaredRelationship, ObservedMod, PackTruth, ParseStatus, ProviderEnrichment,
-    RelationshipResolution, UserAnnotation,
+    DeclaredRelationship, ObservedMod, PackArchiveIssue, PackTruth, ParseStatus,
+    ProviderEnrichment, RelationshipResolution, UserAnnotation,
 };
 use crate::services::hash_service::hash_file;
 use crate::services::mod_parser::parse_mod_jar_observed;
 use crate::services::scanner::scan_mods_directory;
+
+pub fn verify_archive(path: &Path) -> Result<()> {
+    let mut archive = ZipArchive::new(std::fs::File::open(path)?)?;
+    if archive.is_empty() {
+        anyhow::bail!("Archive has no entries");
+    }
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)?;
+        if !entry.is_dir() {
+            io::copy(&mut entry, &mut io::sink())?;
+        }
+    }
+    Ok(())
+}
+
+pub fn scan_pack_integrity(mods_dir: &Path) -> Result<Vec<PackArchiveIssue>> {
+    let mut issues = Vec::new();
+    for path in scan_mods_directory(mods_dir)? {
+        let result = verify_archive(&path);
+        if let Err(error) = result {
+            issues.push(PackArchiveIssue {
+                file_path: path.to_string_lossy().to_string(),
+                message: format!("Archive or entry cannot be read: {error}"),
+            });
+        }
+    }
+    Ok(issues)
+}
 
 pub fn scan_pack_truth(
     instance_id: &str,
@@ -216,6 +246,36 @@ mod tests {
             categories: vec![],
             related_mods: vec![],
         }
+    }
+
+    #[test]
+    fn integrity_scan_detects_corrupt_entries_without_flagging_readable_jars() {
+        let root = std::env::temp_dir().join(format!("modly-health-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let good = root.join("good.jar");
+        let bad = root.join("bad.jar");
+        for path in [&good, &bad] {
+            let mut zip = ZipWriter::new(File::create(path).unwrap());
+            zip.start_file(
+                "payload.bin",
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
+            )
+            .unwrap();
+            zip.write_all(b"unique-content-for-crc").unwrap();
+            zip.finish().unwrap();
+        }
+        let mut bytes = fs::read(&bad).unwrap();
+        let needle = b"unique-content-for-crc";
+        let offset = bytes
+            .windows(needle.len())
+            .position(|window| window == needle)
+            .unwrap();
+        bytes[offset] = b'X';
+        fs::write(&bad, bytes).unwrap();
+        let issues = super::scan_pack_integrity(&root).unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].file_path, bad.to_string_lossy());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

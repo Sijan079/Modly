@@ -9,6 +9,7 @@ import { api } from "@/lib/api";
 const DashboardPage = lazy(() => import("@/pages/Dashboard").then(({ DashboardPage }) => ({ default: DashboardPage })));
 const InstancesPage = lazy(() => import("@/pages/Instances").then(({ InstancesPage }) => ({ default: InstancesPage })));
 const ModsPage = lazy(() => import("@/pages/Mods").then(({ ModsPage }) => ({ default: ModsPage })));
+const PackHealthPage = lazy(() => import("@/pages/PackHealth").then(({ PackHealthPage }) => ({ default: PackHealthPage })));
 const RelationshipsPage = lazy(() => import("@/pages/Dependencies").then(({ RelationshipsPage }) => ({ default: RelationshipsPage })));
 const ModSuggestionsPage = lazy(() => import("@/pages/ModSuggestions").then(({ ModSuggestionsPage }) => ({ default: ModSuggestionsPage })));
 const ResourcePacksPage = lazy(() => import("@/pages/ResourcePacks").then(({ ResourcePacksPage }) => ({ default: ResourcePacksPage })));
@@ -37,6 +38,7 @@ export default function App() {
               <Route path="/" element={<ModuleRoute name="Dashboard"><DashboardPage /></ModuleRoute>} />
               <Route path="/instances" element={<ModuleRoute name="Instances"><InstancesPage /></ModuleRoute>} />
               <Route path="/mods" element={<ModuleRoute name="Mods"><ModsPage /></ModuleRoute>} />
+              <Route path="/health" element={<ModuleRoute name="Pack Health"><PackHealthPage /></ModuleRoute>} />
               <Route path="/dependencies" element={<ModuleRoute name="Relationships"><RelationshipsPage /></ModuleRoute>} />
               <Route path="/mod-suggestions" element={<ModuleRoute name="Mod Suggestions"><ModSuggestionsPage /></ModuleRoute>} />
               <Route path="/scout" element={<ModuleRoute name="Modpack Scout"><ScoutPage /></ModuleRoute>} />

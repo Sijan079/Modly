@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import cytoscape, {
   type Core,
   type ElementDefinition,
@@ -307,6 +308,14 @@ export function RelationshipsPage() {
 
   const [edgeFilter, setEdgeFilter] = useState<EdgeFilter>("all");
   const [activeModId, setActiveModId] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const linkedPath = searchParams.get("mod");
+  useEffect(() => {
+    if (!linkedPath || !mods.length) return;
+    const mod = mods.find((item) => item.filePath === linkedPath);
+    if (mod) setActiveModId(mod.id);
+    setSearchParams((params) => { params.delete("mod"); return params; }, { replace: true });
+  }, [linkedPath, mods, setSearchParams]);
   const [search, setSearch] = useState("");
   const [showIsolated, setShowIsolated] = useState(false);
   const [toast, setToast] = useState<ToastState>(null);

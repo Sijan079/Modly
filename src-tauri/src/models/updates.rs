@@ -95,16 +95,6 @@ pub struct ConfirmUpdateMatchInput {
     pub project_url: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UpdateModFromModrinthInput {
-    pub mod_id: String,
-    pub version_id: String,
-    pub download_url: String,
-    pub file_name: String,
-    pub expected_sha256: Option<String>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SuggestionVersionOption {
@@ -136,14 +126,4 @@ pub struct ModrinthProjectSummary {
 pub struct ModrinthProjectDetails {
     pub project: ModrinthProjectSummary,
     pub authors: Vec<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InstallSuggestionFromModrinthInput {
-    pub suggestion_id: String,
-    pub version_id: String,
-    pub download_url: String,
-    pub file_name: String,
-    pub expected_sha256: Option<String>,
 }

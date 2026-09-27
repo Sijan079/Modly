@@ -6,6 +6,7 @@ import {
   Image,
   Lightbulb,
   Network,
+  HeartPulse,
   Package,
   RefreshCw,
   ScanSearch,
@@ -26,6 +27,7 @@ const navGroups = [
     label: "Content",
     items: [
       { to: "/mods", icon: Package, label: "Mods" },
+      { to: "/health", icon: HeartPulse, label: "Pack Health" },
       { to: "/dependencies", icon: Network, label: "Relationships" },
       { to: "/mod-suggestions", icon: Lightbulb, label: "Suggestions" },
       { to: "/scout", icon: ScanSearch, label: "Modpack Scout" },

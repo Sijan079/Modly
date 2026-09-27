@@ -15,7 +15,7 @@ use crate::models::mod_metadata::{
 };
 use crate::services::hash_service::hash_file;
 use crate::services::mod_parser::{fallback_metadata, parse_mod_jar};
-use crate::services::pack_truth::scan_pack_truth;
+use crate::services::pack_truth::{scan_pack_integrity, scan_pack_truth};
 use crate::services::scanner::scan_mods_directory;
 use crate::services::updates::UpdateService;
 use crate::state::with_state;
@@ -45,6 +45,21 @@ pub async fn get_pack_truth(
             &saved_mods,
         )
         .map_err(|error| error.to_string())
+    })
+}
+
+#[command]
+pub async fn get_pack_health_integrity(
+    instance_id: String,
+) -> Result<Vec<crate::models::pack_truth::PackArchiveIssue>, String> {
+    with_state(|state| {
+        let instance = state
+            .db
+            .get_instance(&instance_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "Instance not found".to_string())?;
+        scan_pack_integrity(&Path::new(&instance.game_dir).join("mods"))
+            .map_err(|error| error.to_string())
     })
 }
 
@@ -467,37 +482,6 @@ pub async fn toggle_mod_enabled(
 }
 
 #[command]
-pub async fn delete_mod(mod_id: String) -> Result<(), String> {
-    with_state(|state| {
-        let mod_file = state
-            .db
-            .get_mod_by_id(&mod_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "Mod not found".to_string())?;
-
-        let path = Path::new(&mod_file.file_path);
-        if path.exists() {
-            std::fs::remove_file(path).map_err(|e| e.to_string())?;
-        }
-
-        state.db.delete_mod(&mod_id).map_err(|e| e.to_string())?;
-        let instance_name = state
-            .db
-            .get_instance(&mod_file.instance_id)
-            .map_err(|e| e.to_string())?
-            .map(|instance| instance.name);
-        state
-            .db
-            .append_log(
-                "info",
-                &format!("Removed mod: {}", mod_display_name(&mod_file)),
-                instance_name.as_deref(),
-            )
-            .map_err(|e| e.to_string())
-    })
-}
-
-#[command]
 pub async fn update_mod_metadata(input: UpdateModMetadataInput) -> Result<ModFile, String> {
     with_state(|state| {
         let updated = state
@@ -617,130 +601,6 @@ pub async fn reset_mod_metadata(mod_id: String) -> Result<ModFile, String> {
                 "info",
                 &format!("Reset mod metadata: {}", mod_display_name(&saved)),
                 instance_name.as_deref(),
-            )
-            .map_err(|e| e.to_string())?;
-        Ok(saved)
-    })
-}
-
-#[command]
-pub async fn copy_mod_to_instance(
-    source_path: String,
-    target_instance_id: String,
-) -> Result<ModFile, String> {
-    with_state(|state| {
-        let instance = state
-            .db
-            .get_instance(&target_instance_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "Instance not found".to_string())?;
-
-        let source = Path::new(&source_path);
-        let file_name = source
-            .file_name()
-            .ok_or_else(|| "Invalid source path".to_string())?;
-        let dest = Path::new(&instance.game_dir).join("mods").join(file_name);
-        std::fs::create_dir_all(dest.parent().unwrap()).map_err(|e| e.to_string())?;
-        std::fs::copy(source, &dest).map_err(|e| e.to_string())?;
-
-        let metadata = parse_mod_jar(&dest).ok();
-        let hash_sha256 = hash_file(&dest).ok();
-
-        let mod_file = ModFile {
-            id: Uuid::new_v4().to_string(),
-            instance_id: target_instance_id,
-            file_name: file_name.to_string_lossy().to_string(),
-            file_path: dest.to_string_lossy().to_string(),
-            installed_at: file_installed_at(&dest)
-                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
-            enabled: true,
-            hash_sha256,
-            source_url: None,
-            metadata,
-            categories: vec![],
-            related_mods: vec![],
-        };
-
-        state.db.upsert_mod(&mod_file).map_err(|e| e.to_string())?;
-        state
-            .db
-            .append_log(
-                "info",
-                &format!("Added mod: {}", mod_display_name(&mod_file)),
-                Some(&instance.name),
-            )
-            .map_err(|e| e.to_string())?;
-        Ok(mod_file)
-    })
-}
-
-#[command]
-pub async fn promote_mod_suggestion(suggestion_id: String) -> Result<ModFile, String> {
-    with_state(|state| {
-        let suggestion = state
-            .db
-            .get_mod_suggestion_by_id(&suggestion_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "Suggestion not found".to_string())?;
-
-        if suggestion.file_path.trim().is_empty() {
-            return Err("Suggestion has no downloaded file attached".to_string());
-        }
-
-        let instance = state
-            .db
-            .get_instance(&suggestion.instance_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "Instance not found".to_string())?;
-
-        let source = Path::new(&suggestion.file_path);
-        if !source.exists() {
-            return Err("Downloaded file could not be found".to_string());
-        }
-
-        let file_name = source
-            .file_name()
-            .ok_or_else(|| "Invalid suggestion file path".to_string())?;
-        let dest = Path::new(&instance.game_dir).join("mods").join(file_name);
-        std::fs::create_dir_all(dest.parent().unwrap()).map_err(|e| e.to_string())?;
-        std::fs::copy(source, &dest).map_err(|e| e.to_string())?;
-
-        let metadata = suggestion
-            .metadata
-            .clone()
-            .or_else(|| parse_mod_jar(&dest).ok());
-        let hash_sha256 = hash_file(&dest).ok();
-        let mod_file = ModFile {
-            id: Uuid::new_v4().to_string(),
-            instance_id: suggestion.instance_id.clone(),
-            file_name: file_name.to_string_lossy().to_string(),
-            file_path: dest.to_string_lossy().to_string(),
-            installed_at: file_installed_at(&dest)
-                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
-            enabled: true,
-            hash_sha256,
-            source_url: suggestion.source_url.clone(),
-            metadata,
-            categories: suggestion.categories.clone(),
-            related_mods: vec![],
-        };
-
-        state.db.upsert_mod(&mod_file).map_err(|e| e.to_string())?;
-        let saved = state
-            .db
-            .get_mod_by_path(&suggestion.instance_id, &mod_file.file_path)
-            .map_err(|e| e.to_string())?
-            .unwrap_or(mod_file);
-        state
-            .db
-            .delete_mod_suggestion(&suggestion_id)
-            .map_err(|e| e.to_string())?;
-        state
-            .db
-            .append_log(
-                "info",
-                &format!("Promoted suggestion to mod: {}", mod_display_name(&saved)),
-                Some(&instance.name),
             )
             .map_err(|e| e.to_string())?;
         Ok(saved)

@@ -1,4 +1,4 @@
-import { Check, Eye, EyeOff, Minus, Trash2 } from "lucide-react";
+import { Check, Eye, EyeOff, Minus, Replace, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { PlatformLinkButton } from "@/components/ui/platform-link-button";
@@ -12,6 +12,7 @@ interface ModTableProps {
   onToggle: (modId: string, enabled: boolean) => void;
   onEdit: (mod: ModFile) => void;
   onDelete: (mod: ModFile) => void;
+  onReplace?: (mod: ModFile) => void;
   selectedModIds?: string[];
   onSelectionChange?: (modId: string, selected: boolean) => void;
   onSelectAll?: (selected: boolean) => void;
@@ -24,6 +25,7 @@ export function ModTable({
   onToggle,
   onEdit,
   onDelete,
+  onReplace,
   selectedModIds = [],
   onSelectionChange,
   onSelectAll,
@@ -69,7 +71,7 @@ export function ModTable({
             <th className="w-[10%] px-4 py-3 text-left font-medium">Loader</th>
             <th className="w-[10%] px-4 py-3 text-left font-medium">Side</th>
             <th className="w-[10%] px-4 py-3 text-left font-medium">Link</th>
-            <th className="w-24 px-4 py-3 text-left font-medium">
+            <th className="w-32 px-4 py-3 text-left font-medium">
               <span className="sr-only">Actions</span>
             </th>
           </tr>
@@ -148,6 +150,7 @@ export function ModTable({
                 <PlatformLinkButton url={mod.sourceUrl ?? mod.metadata?.modrinthUrl ?? null} />
               </td>
               <td className="px-4 py-3">
+                {onReplace && <Button variant="ghost" size="icon" className="h-8 w-8" aria-label={`Replace ${mod.metadata?.name ?? mod.fileName}`} title="Replace JAR" onClick={(event) => { event.stopPropagation(); onReplace(mod); }}><Replace className="h-4 w-4" /></Button>}
                 <Button
                   variant="ghost"
                   size="icon"

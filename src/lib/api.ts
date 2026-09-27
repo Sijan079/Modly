@@ -9,6 +9,12 @@ import type {
   MinecraftScanResult,
   ModFile,
   PackTruth,
+  ChangeRequest,
+  ChangePlan,
+  ChangeApplyResult,
+  ChangeBackup,
+  ChangeRestoreResult,
+  PackArchiveIssue,
   ModTruthRelationships,
   ModIntegrityAudit,
   ModMetadata,
@@ -31,20 +37,28 @@ import type {
   CheckUpdateTargetInput,
   ConfirmUpdateMatchInput,
   SavedUpdateCheck,
-  UpdateModFromModrinthInput,
   UpdateRow,
   UpdateTarget,
   SuggestionVersionOption,
-  InstallSuggestionFromModrinthInput,
   ModrinthProjectDetails,
   ModrinthProjectSummary,
   ScoutAnalysis,
   ScoutTarget,
   CandidateSearchResult,
+  ScoutRecommendationDecision,
 } from "./types";
 
 export const api = {
+  changes: {
+    preview: (request: ChangeRequest) => invoke<ChangePlan>("preview_mod_change", { request }),
+    apply: (planId: string) => invoke<ChangeApplyResult>("apply_mod_change", { planId }),
+    discard: (planId: string) => invoke<void>("discard_mod_change_plan", { planId }),
+    backups: (instanceId: string) => invoke<ChangeBackup[]>("list_mod_change_backups", { instanceId }),
+    restore: (instanceId: string, backupId: string) => invoke<ChangeRestoreResult>("restore_mod_change", { instanceId, backupId }),
+  },
   scout: {
+    listDecisions: (targetId: string) => invoke<ScoutRecommendationDecision[]>("list_scout_recommendation_decisions", { targetId }),
+    setDecision: (targetId: string, projectId: string, decision: "rejected" | "clear") => invoke<void>("set_scout_recommendation_decision", { targetId, projectId, decision }),
     listTargets: () => invoke<ScoutTarget[]>("list_scout_targets"),
     createTarget: (path: string, name?: string | null) =>
       invoke<ScoutTarget>("create_scout_target", { input: { path, name: name ?? null } }),
@@ -97,6 +111,8 @@ export const api = {
       invoke<ModFile[]>("scan_instance_mods", { instanceId }),
     truth: (instanceId: string) =>
       invoke<PackTruth>("get_pack_truth", { instanceId }),
+    healthIntegrity: (instanceId: string) =>
+      invoke<PackArchiveIssue[]>("get_pack_health_integrity", { instanceId }),
     truthRelationships: (instanceId: string, filePath: string) =>
       invoke<ModTruthRelationships>("get_mod_truth_relationships", { instanceId, filePath }),
     checkIntegrity: (instanceId: string) =>
@@ -107,14 +123,8 @@ export const api = {
       invoke<ModMetadata>("parse_mod_metadata", { filePath }),
     toggle: (instanceId: string, modId: string, enabled: boolean) =>
       invoke<void>("toggle_mod_enabled", { instanceId, modId, enabled }),
-    delete: (modId: string) =>
-      invoke<void>("delete_mod", { modId }),
     deleteSuggestion: (id: string) =>
       invoke<void>("delete_mod_suggestion", { id }),
-    promoteSuggestion: (suggestionId: string) =>
-      invoke<ModFile>("promote_mod_suggestion", { suggestionId }),
-    copyToInstance: (sourcePath: string, targetInstanceId: string) =>
-      invoke<ModFile>("copy_mod_to_instance", { sourcePath, targetInstanceId }),
     exportHtml: (input: ExportModListInput) =>
       invoke<void>("export_mod_list_html", { input }),
     updateMetadata: (input: UpdateModMetadataInput) =>
@@ -161,8 +171,6 @@ export const api = {
       invoke<UpdateRow>("check_update_target", { input }),
     confirmMatch: (input: ConfirmUpdateMatchInput) =>
       invoke<void>("confirm_update_match", { input }),
-    updateMod: (input: UpdateModFromModrinthInput) =>
-      invoke<ModFile>("update_mod_from_modrinth", { input }),
     listSuggestionVersions: (
       suggestionId: string,
       gameVersion?: string | null,
@@ -177,8 +185,6 @@ export const api = {
       invoke<ModrinthProjectSummary[]>("get_modrinth_projects", { projectIds }),
     modrinthProjectDetails: (projectId: string) =>
       invoke<ModrinthProjectDetails>("get_modrinth_project_details", { projectId }),
-    installSuggestion: (input: InstallSuggestionFromModrinthInput) =>
-      invoke<ModFile>("install_suggestion_from_modrinth", { input }),
     log: (instanceId: string, level: string, message: string) =>
       invoke<void>("append_update_log", { instanceId, level, message }),
   },

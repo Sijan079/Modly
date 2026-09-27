@@ -5,10 +5,14 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 use super::ModProvider;
-use crate::models::scout::{CandidateMod, CandidateSearchRequest, ScoutProviderMetadata};
+use crate::models::scout::{
+    CandidateDependency, CandidateMod, CandidateSearchRequest, CandidateVersionEvidence,
+    ScoutProviderMetadata,
+};
 
 const MODRINTH_API: &str = "https://api.modrinth.com/v2";
 
+#[derive(Clone)]
 pub struct ModrinthProvider {
     client: Client,
 }
@@ -59,11 +63,36 @@ struct ProjectResponse {
     additional_categories: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct VersionResponse {
+    id: String,
+    version_number: String,
+    date_published: String,
+    #[serde(default)]
+    game_versions: Vec<String>,
+    #[serde(default)]
+    loaders: Vec<String>,
+    #[serde(default)]
+    dependencies: Vec<VersionDependency>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VersionDependency {
+    project_id: Option<String>,
+    version_id: Option<String>,
+    file_name: Option<String>,
+    dependency_type: String,
+}
+
 impl Default for ModrinthProvider {
     fn default() -> Self {
         Self {
             client: Client::builder()
-                .user_agent("Sijan079/Modly/1.2.2 (Modpack Scout)")
+                .user_agent(format!(
+                    "Sijan079/Modly/{} (Modpack Scout)",
+                    env!("CARGO_PKG_VERSION")
+                ))
+                .timeout(std::time::Duration::from_secs(12))
                 .build()
                 .expect("valid Modrinth HTTP client"),
         }
@@ -71,6 +100,49 @@ impl Default for ModrinthProvider {
 }
 
 impl ModrinthProvider {
+    pub async fn compatible_version_evidence(
+        &self,
+        project_id: &str,
+        minecraft: &str,
+        loader: &str,
+    ) -> Result<Option<CandidateVersionEvidence>> {
+        let loaders = serde_json::to_string(&[loader])?;
+        let game_versions = serde_json::to_string(&[minecraft])?;
+        let mut versions: Vec<VersionResponse> = self
+            .client
+            .get(format!("{MODRINTH_API}/project/{project_id}/version"))
+            .query(&[
+                ("loaders", loaders.as_str()),
+                ("game_versions", game_versions.as_str()),
+                ("include_changelog", "false"),
+            ])
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        versions.sort_by(|left, right| right.date_published.cmp(&left.date_published));
+        Ok(versions
+            .into_iter()
+            .next()
+            .map(|version| CandidateVersionEvidence {
+                version_id: version.id,
+                version_number: version.version_number,
+                published_at: version.date_published,
+                game_versions: version.game_versions,
+                loaders: version.loaders,
+                dependencies: version
+                    .dependencies
+                    .into_iter()
+                    .map(|dependency| CandidateDependency {
+                        project_id: dependency.project_id,
+                        version_id: dependency.version_id,
+                        file_name: dependency.file_name,
+                        dependency_type: dependency.dependency_type,
+                    })
+                    .collect(),
+            }))
+    }
     pub async fn metadata_by_hashes(
         &self,
         hashes: &[String],

@@ -51,6 +51,8 @@ pub struct ScoutInstalledMod {
     #[serde(default)]
     pub hash_sha512: String,
     #[serde(default)]
+    pub hash_sha256: Option<String>,
+    #[serde(default)]
     pub provider_metadata: Option<ScoutProviderMetadata>,
 }
 
@@ -122,17 +124,48 @@ pub struct CandidateSearchResult {
 #[serde(rename_all = "camelCase")]
 pub struct Recommendation {
     pub candidate: CandidateMod,
-    pub score: u8,
-    pub status: RecommendationStatus,
-    pub concerns: Vec<String>,
+    pub fit: PackFit,
+    pub availability: String,
+    pub version_evidence: Option<CandidateVersionEvidence>,
+    pub evidence_warning: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum RecommendationStatus {
-    Add,
-    Consider,
-    Skip,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackFit {
+    pub label: String,
+    pub reason: String,
+    pub matching_categories: Vec<String>,
+    pub matching_goal_terms: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CandidateVersionEvidence {
+    pub version_id: String,
+    pub version_number: String,
+    pub published_at: String,
+    pub game_versions: Vec<String>,
+    pub loaders: Vec<String>,
+    pub dependencies: Vec<CandidateDependency>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CandidateDependency {
+    pub project_id: Option<String>,
+    pub version_id: Option<String>,
+    pub file_name: Option<String>,
+    pub dependency_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScoutRecommendationDecision {
+    pub target_id: String,
+    pub project_id: String,
+    pub decision: String,
+    pub updated_at: String,
 }
 
 pub fn classify_mod(metadata: &ModMetadata) -> ScoutModClassification {

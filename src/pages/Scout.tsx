@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { openUrl } from "@tauri-apps/plugin-opener";
-import { ExternalLink, Filter, Plus, RefreshCw, ScanSearch, Search, TriangleAlert } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { RefreshCw, ScanSearch, TriangleAlert } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { PageShell } from "@/components/layout/PageShell";
 import { ThemedSelect } from "@/components/ui/themed-select";
-import { Input } from "@/components/ui/input";
+import { ScoutRecommendations } from "@/components/scout/ScoutRecommendations";
 import { useInstances } from "@/hooks/useInstances";
 import { useModSuggestions, useUpsertModSuggestion } from "@/hooks/useMods";
 import { useAnalyzeScoutTarget, useCreateScoutInstanceTarget, useDiscoverScoutCandidates, useScoutAnalysis, useScoutRecommendations, useScoutTargets, useSearchScoutCandidates } from "@/hooks/useScout";
-import type { Recommendation, RecommendationStatus, ScoutInstalledMod } from "@/lib/types";
+import type { Recommendation, ScoutInstalledMod } from "@/lib/types";
+import { api } from "@/lib/api";
+import { isScoutAnalysisCurrent, scoutPackHealth } from "@/lib/scout-evidence";
 import { parseModSourceUrl } from "@/lib/mod-source-url";
 import { formatLoader } from "@/lib/utils";
 import { useAppStore } from "@/store/app";
@@ -28,15 +29,26 @@ export function ScoutPage() {
   const discoverCandidates = useDiscoverScoutCandidates();
   const candidateSearch = useSearchScoutCandidates();
   const upsertSuggestion = useUpsertModSuggestion();
+  const queryClient = useQueryClient();
   const [candidateQuery, setCandidateQuery] = useState("");
   const [activeTab, setActiveTab] = useState<"recommendations" | "installed">("recommendations");
   const [addingProjectId, setAddingProjectId] = useState<string | null>(null);
-  const [hiddenProjectIds, setHiddenProjectIds] = useState<Set<string>>(() => new Set());
+  const [actionError, setActionError] = useState<string | null>(null);
   const selectedTarget = targets.find((target) => target.id === targetId) ?? null;
+  const selectedInstance = instances.find((instance) => instance.id === selectedTarget?.instanceId) ?? null;
   const { data: suggestions = [] } = useModSuggestions(selectedTarget?.instanceId ?? null);
+  const { data: decisions = [], refetch: refetchDecisions } = useQuery({
+    queryKey: ["scout-decisions", targetId], enabled: !!targetId,
+    queryFn: () => targetId ? api.scout.listDecisions(targetId) : [],
+  });
   const { data: savedAnalysis = null, isLoading: analysisLoading } = useScoutAnalysis(targetId);
   const { data: savedRecommendations = null, isLoading: recommendationsLoading } = useScoutRecommendations(targetId);
   const analysis = analyze.data?.targetId === targetId ? analyze.data : savedAnalysis;
+  const { data: truth, error: truthError } = useQuery({
+    queryKey: ["scout-truth", selectedInstance?.id, analysis?.id], enabled: !!selectedInstance,
+    queryFn: () => api.mods.truth(selectedInstance!.id),
+  });
+  const analysisCurrent = truth && analysis ? isScoutAnalysisCurrent(truth, analysis) : null;
 
   useEffect(() => {
     if (!selectedInstanceId && instances[0]) setSelectedInstance(instances[0].id);
@@ -59,24 +71,20 @@ export function ScoutPage() {
 
   useEffect(() => {
     candidateSearch.reset();
-    setHiddenProjectIds(new Set());
   }, [targetId, analysis?.id]);
 
   useEffect(() => {
-    if (!targetId || !analysis || recommendationsLoading || savedRecommendations || discoverCandidates.isPending) return;
+    if (!targetId || !analysis || analysisCurrent !== true || recommendationsLoading || savedRecommendations || discoverCandidates.isPending) return;
     discoverCandidates.mutate(targetId);
-  }, [targetId, analysis?.id, recommendationsLoading, savedRecommendations]);
+  }, [targetId, analysis?.id, analysisCurrent, recommendationsLoading, savedRecommendations]);
 
   const suggestedProjects = useMemo(
     () => new Set(suggestions.map((suggestion) => parseModSourceUrl(suggestion.sourceUrl)?.project).filter((project): project is string => !!project)),
     [suggestions],
   );
   const recommendationResult = candidateSearch.data ?? savedRecommendations;
-  const visibleRecommendations = useMemo(() => recommendationResult?.recommendations.filter(({ candidate }) =>
-    !hiddenProjectIds.has(candidate.projectId) &&
-    !suggestedProjects.has(candidate.slug) &&
-    !suggestedProjects.has(candidate.projectId)
-  ) ?? null, [hiddenProjectIds, recommendationResult, suggestedProjects]);
+  const visibleRecommendations = recommendationResult?.recommendations ?? null;
+  const health = useMemo(() => truth && selectedInstance ? scoutPackHealth(truth, selectedInstance) : null, [truth, selectedInstance]);
 
   const selectInstance = (value: string) => {
     if (value === instanceId) return;
@@ -86,7 +94,7 @@ export function ScoutPage() {
   };
 
   const searchCandidates = () => {
-    if (!targetId || candidateQuery.trim().length < 2) return;
+    if (!targetId || analysisCurrent !== true || candidateQuery.trim().length < 2) return;
     candidateSearch.mutate({ targetId, query: candidateQuery.trim() });
   };
 
@@ -94,6 +102,7 @@ export function ScoutPage() {
     if (!selectedTarget?.instanceId) return;
     const { candidate } = recommendation;
     setAddingProjectId(candidate.projectId);
+    setActionError(null);
     try {
       await upsertSuggestion.mutateAsync({
         instanceId: selectedTarget.instanceId,
@@ -110,12 +119,18 @@ export function ScoutPage() {
         modIdField: candidate.slug,
         categoryIds: [],
       });
-      setHiddenProjectIds((current) => new Set(current).add(candidate.projectId));
-    } catch {
-      // The mutation exposes its error in the recommendation panel.
+    } catch (error) {
+      setActionError(String(error));
     } finally {
       setAddingProjectId(null);
     }
+  };
+
+  const setDecision = async (projectId: string, decision: "rejected" | "clear") => {
+    if (!targetId) return;
+    await api.scout.setDecision(targetId, projectId, decision);
+    await refetchDecisions();
+    await queryClient.invalidateQueries({ queryKey: ["scout-recommendations", targetId] });
   };
 
   return (
@@ -150,16 +165,25 @@ export function ScoutPage() {
             <Button variant="ghost" className={activeTab === "installed" ? "rounded-none border-b-2 border-[var(--color-primary)]" : "rounded-none text-[var(--color-muted-foreground)]"} onClick={() => setActiveTab("installed")}>Installed Mods</Button>
           </div>
           {activeTab === "recommendations" ? (
-            <CandidateSearch
+            <ScoutRecommendations
               query={candidateQuery}
               onQueryChange={setCandidateQuery}
               onSearch={searchCandidates}
               loading={candidateSearch.isPending || discoverCandidates.isPending}
-              error={candidateSearch.error ?? discoverCandidates.error ?? upsertSuggestion.error}
+              canSearch={analysisCurrent === true}
+              error={candidateSearch.error ?? discoverCandidates.error ?? upsertSuggestion.error ?? actionError}
               result={visibleRecommendations}
-              canAddToSuggestions={!!selectedTarget?.instanceId}
+              truth={analysisCurrent ? truth ?? null : null}
+              analysis={analysis}
+              instance={selectedInstance}
+              decisions={decisions}
+              savedProjects={suggestedProjects}
+              health={health}
+              truthError={truthError ?? (analysisCurrent === false ? "The pack changed since this Scout analysis. Analyze Pack again to refresh recommendation evidence." : null)}
+              canSave={!!selectedTarget?.instanceId && analysisCurrent === true}
               addingProjectId={addingProjectId}
-              onAddToSuggestions={addToSuggestions}
+              onSave={addToSuggestions}
+              onDecision={setDecision}
             />
           ) : (
             <InstalledMods analysis={analysis.mods} failures={analysis.failures} cacheHits={analysis.providerCacheHits} fetches={analysis.providerFetches} warning={analysis.providerWarning} />
@@ -173,151 +197,8 @@ export function ScoutPage() {
   );
 }
 
-function CandidateSearch({ query, onQueryChange, onSearch, loading, error, result, canAddToSuggestions, addingProjectId, onAddToSuggestions }: {
-  query: string;
-  onQueryChange: (value: string) => void;
-  onSearch: () => void;
-  loading: boolean;
-  error: unknown;
-  result: Recommendation[] | null;
-  canAddToSuggestions: boolean;
-  addingProjectId: string | null;
-  onAddToSuggestions: (recommendation: Recommendation) => void;
-}) {
-  const pageSize = 20;
-  const [scoreOrder, setScoreOrder] = useState<"desc" | "asc">("desc");
-  const [statusFilters, setStatusFilters] = useState<Set<RecommendationStatus>>(() => new Set());
-  const [page, setPage] = useState(1);
-  const displayedResults = useMemo(() => {
-    if (!result) return null;
-    return result
-      .filter((recommendation) => statusFilters.size === 0 || statusFilters.has(recommendation.status))
-      .sort((left, right) => scoreOrder === "desc" ? right.score - left.score : left.score - right.score);
-  }, [result, scoreOrder, statusFilters]);
-  const pageCount = Math.max(1, Math.ceil((displayedResults?.length ?? 0) / pageSize));
-  const currentPage = Math.min(page, pageCount);
-  const paginatedResults = displayedResults?.slice((currentPage - 1) * pageSize, currentPage * pageSize) ?? null;
-
-  useEffect(() => setPage(1), [result, scoreOrder, statusFilters]);
-
-  const toggleStatus = (status: RecommendationStatus) => {
-    setStatusFilters((current) => {
-      const next = new Set(current);
-      if (next.has(status)) next.delete(status);
-      else next.add(status);
-      return next;
-    });
-  };
-
-  return (
-    <>
-      <Card>
-        <CardContent className="p-4">
-          <form className="flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); onSearch(); }}>
-            <div className="relative min-w-64 flex-1">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-muted-foreground)]" />
-              <Input className="pl-9" value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="Try structures, farming, Create, performance..." aria-label="Candidate search" />
-            </div>
-            <DropdownMenu.Root>
-              <DropdownMenu.Trigger asChild>
-                <Button type="button" variant="outline" size="icon" aria-label="Filter recommendations" title="Filter recommendations">
-                  <Filter className="h-4 w-4" />
-                </Button>
-              </DropdownMenu.Trigger>
-              <DropdownMenu.Portal>
-                <DropdownMenu.Content align="end" sideOffset={6} className="z-50 min-w-56 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] p-3 shadow-lg">
-                  <DropdownMenu.Label className="text-xs font-medium text-[var(--color-muted-foreground)]">Score</DropdownMenu.Label>
-                  <div className="mt-2 flex gap-2">
-                    {[{ value: "desc", label: "Highest first" }, { value: "asc", label: "Lowest first" }].map((option) => (
-                      <Button key={option.value} type="button" size="sm" variant={scoreOrder === option.value ? "default" : "outline"} className="h-7 rounded-full px-3 text-xs" onClick={() => setScoreOrder(option.value as "desc" | "asc")}>
-                        {option.label}
-                      </Button>
-                    ))}
-                  </div>
-                  <DropdownMenu.Separator className="my-1 h-px bg-[var(--color-border)]" />
-                  <DropdownMenu.Label className="mt-3 text-xs font-medium text-[var(--color-muted-foreground)]">Status</DropdownMenu.Label>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {(["ADD", "CONSIDER", "SKIP"] as RecommendationStatus[]).map((status) => (
-                      <Button key={status} type="button" size="sm" variant={statusFilters.has(status) ? "default" : "outline"} className="h-7 rounded-full px-3 text-xs" onClick={() => toggleStatus(status)}>
-                        {formatTag(status)}
-                      </Button>
-                    ))}
-                  </div>
-                </DropdownMenu.Content>
-              </DropdownMenu.Portal>
-            </DropdownMenu.Root>
-            <Button type="submit" disabled={loading || query.trim().length < 2}>
-              {loading && <RefreshCw className="h-4 w-4 animate-spin" />}
-              {loading ? "Searching..." : "Search Modrinth"}
-            </Button>
-          </form>
-          {error != null && <div className="mt-4"><ErrorMessage error={error} /></div>}
-        </CardContent>
-      </Card>
-      {paginatedResults && displayedResults && (
-        displayedResults.length === 0 ? (
-          <Card><CardContent className="p-5 text-center text-sm text-[var(--color-muted-foreground)]">{result?.length === 0 ? "No compatible candidates matched this search." : "No recommendations match the selected filters."}</CardContent></Card>
-        ) : (
-          <>
-            <div className="grid gap-3 lg:grid-cols-2">
-              {paginatedResults.map((recommendation) => <RecommendationCard key={recommendation.candidate.projectId} recommendation={recommendation} canAddToSuggestions={canAddToSuggestions} adding={addingProjectId === recommendation.candidate.projectId} onAddToSuggestions={onAddToSuggestions} />)}
-            </div>
-            {pageCount > 1 && (
-              <div className="flex items-center justify-center gap-3">
-                <Button type="button" variant="outline" size="sm" disabled={currentPage === 1} onClick={() => setPage(currentPage - 1)}>Previous</Button>
-                <span className="text-xs text-[var(--color-muted-foreground)]">Page {currentPage} of {pageCount}</span>
-                <Button type="button" variant="outline" size="sm" disabled={currentPage === pageCount} onClick={() => setPage(currentPage + 1)}>Next</Button>
-              </div>
-            )}
-          </>
-        )
-      )}
-    </>
-  );
-}
-
-function RecommendationCard({ recommendation, canAddToSuggestions, adding, onAddToSuggestions }: { recommendation: Recommendation; canAddToSuggestions: boolean; adding: boolean; onAddToSuggestions: (recommendation: Recommendation) => void }) {
-  const { candidate } = recommendation;
-  const [warningsOpen, setWarningsOpen] = useState(false);
-  const concerns = recommendation.concerns;
-  return (
-    <Card className="scout-recommendation-card group relative flex min-h-44 gap-4 rounded-md p-4 transition-[transform,border-color,box-shadow] duration-200">
-      <div className="flex w-20 shrink-0 flex-col items-center gap-2 self-stretch text-center">
-        {candidate.iconUrl ? <img src={candidate.iconUrl} alt="" className="h-16 w-16 rounded-md object-cover" /> : <div className="h-16 w-16 rounded-md bg-[var(--color-muted)]" />}
-        <Badge variant={statusVariant(recommendation.status)} className={`w-16 justify-center !rounded-sm px-1 tracking-wide ${recommendation.status === "CONSIDER" ? "text-[9px]" : "text-[10px]"}`}>{recommendation.status}</Badge>
-        <div className="flex flex-1 items-center justify-center text-4xl font-bold leading-none tracking-tight" style={{ fontFamily: '"Bahnschrift SemiCondensed", "Arial Narrow", sans-serif' }}>{recommendation.score}</div>
-      </div>
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div className="pr-24">
-          <h3 className="font-medium">{candidate.title}</h3>
-          <p className="text-xs text-[var(--color-muted-foreground)]">by {candidate.author}</p>
-        </div>
-        <div className="mt-2 flex flex-wrap gap-1">{candidate.categories.slice(0, 4).map((category) => <Badge key={category} variant="secondary">{formatTag(category)}</Badge>)}</div>
-        <p className="mt-3 flex-1 text-sm text-[var(--color-muted-foreground)]">{candidate.description}</p>
-        <div className={`absolute right-3 top-3 flex gap-1 transition-opacity ${warningsOpen ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"}`}>
-          {concerns.length > 0 && <Button variant="ghost" size="icon" className="h-8 w-8 text-amber-300" onClick={() => setWarningsOpen((open) => !open)} aria-label={`${warningsOpen ? "Hide" : "Show"} concerns for ${candidate.title}`} aria-expanded={warningsOpen} title="Recommendation concerns"><TriangleAlert className="h-4 w-4" /></Button>}
-          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openUrl(candidate.projectUrl)} aria-label={`View ${candidate.title} on Modrinth`} title="View on Modrinth"><ExternalLink className="h-4 w-4" /></Button>
-          <Button variant="ghost" size="icon" className="h-8 w-8" disabled={!canAddToSuggestions || adding} title={canAddToSuggestions ? "Add to Suggestions" : "Suggestions require a managed Modly instance"} onClick={() => onAddToSuggestions(recommendation)} aria-label={`Add ${candidate.title} to Suggestions`}>{adding ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}</Button>
-        </div>
-        {warningsOpen && <div className="absolute right-3 top-12 z-20 w-72 rounded-md border border-amber-400/35 bg-[var(--color-card)] p-3 shadow-xl"><p className="text-xs font-semibold text-amber-300">Concerns</p><ul className="mt-2 space-y-2 text-xs text-[var(--color-muted-foreground)]">{concerns.map((concern) => <li key={concern}>• {concern}</li>)}</ul></div>}
-      </div>
-    </Card>
-  );
-}
-
-function statusVariant(status: RecommendationStatus): "success" | "warning" | "destructive" {
-  if (status === "ADD") return "success";
-  if (status === "CONSIDER") return "warning";
-  return "destructive";
-}
-
 function formatTag(tag: string): string {
-  const acronyms = new Set(["api", "qol", "rpg", "vr"]);
-  return tag
-    .split(/[-_\s]+/)
-    .filter(Boolean)
-    .map((word) => acronyms.has(word.toLowerCase()) ? word.toUpperCase() : `${word.charAt(0).toUpperCase()}${word.slice(1).toLowerCase()}`)
-    .join(" ");
+  return tag.split(/[-_\s]+/).filter(Boolean).map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(" ");
 }
 
 function InstalledMods({ analysis, failures, cacheHits, fetches, warning }: { analysis: ScoutInstalledMod[]; failures: Array<{ fileName: string; message: string }>; cacheHits: number; fetches: number; warning: string | null }) {

@@ -8,7 +8,7 @@ use crate::models::scout::{
     classify_mod, minecraft_dependency_version, ScoutAnalysis, ScoutInstalledMod,
     ScoutParseFailure, ScoutTarget,
 };
-use crate::services::hash_service::hash_file_sha512;
+use crate::services::hash_service::{hash_file, hash_file_sha512};
 use crate::services::mod_parser::parse_mod_jar;
 use crate::services::scanner::scan_mods_directory;
 
@@ -70,6 +70,7 @@ pub fn analyze_target(
                     file_path: jar_path.to_string_lossy().to_string(),
                     classification: classify_mod(&metadata),
                     hash_sha512,
+                    hash_sha256: hash_file(&jar_path).ok(),
                     provider_metadata: None,
                     metadata,
                 });

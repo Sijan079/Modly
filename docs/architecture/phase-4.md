@@ -8,15 +8,17 @@ Make Scout reason from the actual pack rather than presenting pseudo-precise rec
 Scout should answer **what might improve this pack, why, and what are the compatibility implications?**
 
 ## Tasks
-- [ ] Replace the current generic 0–100 recommendation score with explainable dimensions/signals.
-- [ ] Base recommendations on the canonical local pack model and health/dependency engine.
-- [ ] Evaluate Minecraft version, loader, required dependencies, and known declared incompatibilities before recommending a candidate.
-- [ ] Explain *why* each mod is suggested in relation to the current pack.
-- [ ] Show maintenance/activity information as evidence, not as proof of quality.
-- [ ] Represent performance impact as unknown unless Modly has defensible evidence.
-- [ ] Merge or rationalize conceptual overlap between **Mod Suggestions** and **Scout**.
-- [ ] Support saved/rejected recommendations without globally interpreting a rejection as "I dislike this category of mod."
-- [ ] Keep recommendation output separate from deterministic health findings.
+- [x] Replace the current generic 0–100 recommendation score with explainable dimensions/signals.
+- [x] Base recommendations on the canonical local pack model and health/dependency engine.
+- [x] Evaluate Minecraft version, loader, required dependencies, and known declared incompatibilities before recommending a candidate.
+- [x] Explain *why* each mod is suggested in relation to the current pack.
+- [x] Show maintenance/activity information as evidence, not as proof of quality.
+- [x] Represent performance impact as unknown unless Modly has defensible evidence.
+- [x] Merge or rationalize conceptual overlap between **Mod Suggestions** and **Scout**.
+- [x] Support saved/rejected recommendations without globally interpreting a rejection as "I dislike this category of mod."
+- [x] Keep recommendation output separate from deterministic health findings.
+
+Scout saves chosen projects in Mod Suggestions. A rejection applies only to one project in one Scout target. Release checks use Modrinth's loader, Minecraft version, and project dependency declarations. Installed project matches require an exact Modrinth file hash. Local JAR manifest conflicts and runtime effects remain unknown until the install plan validates the selected JAR; performance impact is always shown as unknown.
 
 ## Example output
 Instead of:

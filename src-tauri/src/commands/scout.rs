@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::Arc;
 
 use tauri::command;
 use uuid::Uuid;
@@ -7,12 +8,12 @@ use uuid::Uuid;
 use crate::models::mod_metadata::{LoaderKind, ModFile};
 use crate::models::scout::{
     CandidateSearchRequest, CandidateSearchResult, CreateScoutTargetInput, ScoutAnalysis,
-    ScoutModClassification, ScoutProviderMetadata, ScoutTarget,
+    ScoutModClassification, ScoutProviderMetadata, ScoutRecommendationDecision, ScoutTarget,
 };
 use crate::services::providers::modrinth::ModrinthProvider;
 use crate::services::providers::ModProvider;
 use crate::services::scout::{analyze_target, resolve_mods_path};
-use crate::services::scout_scoring::score_candidates;
+use crate::services::scout_scoring::explain_candidates;
 use crate::state::with_state;
 
 #[command]
@@ -21,6 +22,32 @@ pub async fn list_scout_targets() -> Result<Vec<ScoutTarget>, String> {
         state
             .db
             .list_scout_targets()
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[command]
+pub async fn list_scout_recommendation_decisions(
+    target_id: String,
+) -> Result<Vec<ScoutRecommendationDecision>, String> {
+    with_state(|state| {
+        state
+            .db
+            .list_scout_recommendation_decisions(&target_id)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[command]
+pub async fn set_scout_recommendation_decision(
+    target_id: String,
+    project_id: String,
+    decision: String,
+) -> Result<(), String> {
+    with_state(|state| {
+        state
+            .db
+            .set_scout_recommendation_decision(&target_id, &project_id, &decision)
             .map_err(|error| error.to_string())
     })
 }
@@ -112,7 +139,8 @@ pub async fn analyze_scout_target(target_id: String) -> Result<ScoutAnalysis, St
                     enabled: !scanned_mod.file_name.ends_with(".disabled"),
                     hash_sha256: existing
                         .as_ref()
-                        .and_then(|mod_file| mod_file.hash_sha256.clone()),
+                        .and_then(|mod_file| mod_file.hash_sha256.clone())
+                        .or_else(|| scanned_mod.hash_sha256.clone()),
                     source_url: existing
                         .as_ref()
                         .and_then(|mod_file| mod_file.source_url.clone()),
@@ -263,7 +291,7 @@ pub async fn search_scout_candidates(
     let (analysis, minecraft_version) = compatible_analysis(&target_id)?;
     let loader_key = format!("{:?}", analysis.loader).to_ascii_lowercase();
     let cache_key = format!(
-        "modrinth-recommendations-v4:{}:{}:{}:{}",
+        "modrinth-recommendations-v5:{}:{}:{}:{}",
         analysis.id,
         minecraft_version,
         loader_key,
@@ -373,7 +401,7 @@ async fn search_candidates_for_analysis(
         minecraft_version: minecraft_version.clone(),
         loader: analysis.loader,
         categories,
-        limit: 100,
+        limit: 20,
     };
     let installed = analysis
         .mods
@@ -397,7 +425,59 @@ async fn search_candidates_for_analysis(
             && !installed.contains(&normalize_identifier(&candidate.project_id))
     });
 
-    let recommendations = score_candidates(candidates, &analysis.mods, &scoring_goal);
+    let provider = ModrinthProvider::default();
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(5));
+    let mut pending = Vec::new();
+    let requested_goal = if cache_key.starts_with("modrinth-recommendations-baseline-") {
+        ""
+    } else {
+        &scoring_goal
+    };
+    for mut recommendation in explain_candidates(candidates, &analysis.mods, requested_goal) {
+        let provider = provider.clone();
+        let permit_pool = semaphore.clone();
+        let minecraft = minecraft_version.clone();
+        let loader = format!("{:?}", analysis.loader).to_ascii_lowercase();
+        pending.push(tauri::async_runtime::spawn(async move {
+            let _permit = permit_pool
+                .acquire_owned()
+                .await
+                .expect("semaphore remains open");
+            match provider
+                .compatible_version_evidence(
+                    &recommendation.candidate.project_id,
+                    &minecraft,
+                    &loader,
+                )
+                .await
+            {
+                Ok(Some(version)) => {
+                    recommendation.availability = "matched".to_string();
+                    recommendation.version_evidence = Some(version);
+                }
+                Ok(None) => {
+                    recommendation.availability = "none".to_string();
+                    recommendation.evidence_warning = Some(
+                        "No release matching this loader and Minecraft version was returned."
+                            .to_string(),
+                    );
+                }
+                Err(error) => {
+                    recommendation.evidence_warning = Some(format!(
+                        "Release compatibility could not be verified: {error}"
+                    ))
+                }
+            }
+            recommendation
+        }));
+    }
+    let mut recommendations = Vec::new();
+    for task in pending {
+        recommendations.push(
+            task.await
+                .map_err(|error| format!("Candidate check stopped: {error}"))?,
+        );
+    }
     let result = CandidateSearchResult {
         query: scoring_goal,
         minecraft_version,
@@ -433,12 +513,19 @@ async fn search_candidates_for_analysis(
 }
 
 fn baseline_recommendations_cache_key(analysis_id: &str) -> String {
-    format!("modrinth-recommendations-baseline-v1:{analysis_id}")
+    format!("modrinth-recommendations-baseline-v2:{analysis_id}")
 }
 
 fn profile_categories(analysis: &ScoutAnalysis) -> Vec<String> {
     let mut counts = HashMap::<String, usize>::new();
     for installed_mod in &analysis.mods {
+        if installed_mod
+            .file_name
+            .to_ascii_lowercase()
+            .ends_with(".disabled")
+        {
+            continue;
+        }
         if matches!(
             installed_mod.classification,
             ScoutModClassification::Library

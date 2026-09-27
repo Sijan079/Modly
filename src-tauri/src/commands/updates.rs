@@ -1,28 +1,13 @@
-use std::path::Path;
-
-use sha2::{Digest, Sha256};
 use tauri::command;
-use uuid::Uuid;
 
 use crate::models::mod_metadata::{ModFile, UpdateModMetadataInput};
 use crate::models::updates::{
-    CheckUpdateTargetInput, ConfirmUpdateMatchInput, InstallSuggestionFromModrinthInput,
-    ModrinthProjectDetails, ModrinthProjectSummary, SavedUpdateCheck, SuggestionVersionOption,
-    UpdateItemType, UpdateModFromModrinthInput, UpdateRow, UpdateTarget,
+    CheckUpdateTargetInput, ConfirmUpdateMatchInput, ModrinthProjectDetails,
+    ModrinthProjectSummary, SavedUpdateCheck, SuggestionVersionOption, UpdateItemType, UpdateRow,
+    UpdateTarget,
 };
-use crate::services::hash_service::hash_file;
-use crate::services::mod_parser::parse_mod_jar;
-use crate::services::updates::{download_bytes, extract_modrinth_project_id, UpdateService};
+use crate::services::updates::{extract_modrinth_project_id, UpdateService};
 use crate::state::with_state;
-
-fn file_installed_at(path: &std::path::Path) -> Option<String> {
-    let metadata = std::fs::metadata(path).ok()?;
-    let system_time = metadata
-        .created()
-        .ok()
-        .or_else(|| metadata.modified().ok())?;
-    Some(chrono::DateTime::<chrono::Utc>::from(system_time).to_rfc3339())
-}
 
 #[command]
 pub async fn check_updates(instance_id: String) -> Result<Vec<UpdateRow>, String> {
@@ -193,111 +178,6 @@ pub async fn confirm_update_match(input: ConfirmUpdateMatchInput) -> Result<(), 
 }
 
 #[command]
-pub async fn update_mod_from_modrinth(
-    input: UpdateModFromModrinthInput,
-) -> Result<ModFile, String> {
-    let bytes = download_bytes(&input.download_url)
-        .await
-        .map_err(|e| e.to_string())?;
-    if let Some(expected) = input.expected_sha256.as_deref() {
-        let actual = format!("{:x}", Sha256::digest(&bytes));
-        if !actual.eq_ignore_ascii_case(expected) {
-            return Err("Downloaded file did not match expected SHA-256 hash.".to_string());
-        }
-    }
-
-    with_state(|state| {
-        let existing = state
-            .db
-            .get_mod_by_id(&input.mod_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "Mod not found".to_string())?;
-        let old_path = Path::new(&existing.file_path);
-        let mods_dir = old_path
-            .parent()
-            .ok_or_else(|| "Could not resolve mods folder".to_string())?;
-        std::fs::create_dir_all(mods_dir).map_err(|e| e.to_string())?;
-
-        let safe_file_name = sanitize_file_name(&input.file_name);
-        let new_path = mods_dir.join(&safe_file_name);
-        let temp_path = mods_dir.join(format!("{safe_file_name}.download"));
-        std::fs::write(&temp_path, &bytes).map_err(|e| e.to_string())?;
-
-        let backup_dir = state
-            .app_data_dir
-            .join("backups")
-            .join("mod-updates")
-            .join(chrono::Utc::now().format("%Y%m%d%H%M%S").to_string());
-        std::fs::create_dir_all(&backup_dir).map_err(|e| e.to_string())?;
-        if old_path.exists() {
-            let backup_path = backup_dir.join(
-                old_path
-                    .file_name()
-                    .ok_or_else(|| "Could not resolve old mod file name".to_string())?,
-            );
-            std::fs::rename(old_path, backup_path).map_err(|e| e.to_string())?;
-        }
-        std::fs::rename(&temp_path, &new_path).map_err(|e| e.to_string())?;
-
-        state
-            .db
-            .delete_mod(&existing.id)
-            .map_err(|e| e.to_string())?;
-        let metadata = {
-            let existing_metadata = existing.metadata.clone();
-            let mut parsed = parse_mod_jar(&new_path).ok();
-            if let Some(ref mut parsed_meta) = parsed {
-                if parsed_meta.modrinth_url.is_none() {
-                    parsed_meta.modrinth_url = existing_metadata
-                        .as_ref()
-                        .and_then(|meta| meta.modrinth_url.clone());
-                }
-                parsed_meta.installed_modrinth_version_id = Some(input.version_id.clone());
-            }
-            parsed.or_else(|| {
-                existing_metadata.map(|mut meta| {
-                    meta.installed_modrinth_version_id = Some(input.version_id.clone());
-                    meta
-                })
-            })
-        };
-        let updated = ModFile {
-            id: Uuid::new_v4().to_string(),
-            instance_id: existing.instance_id.clone(),
-            file_name: safe_file_name,
-            file_path: new_path.to_string_lossy().to_string(),
-            installed_at: file_installed_at(&new_path).unwrap_or(existing.installed_at),
-            enabled: true,
-            hash_sha256: hash_file(&new_path).ok(),
-            source_url: existing.source_url,
-            metadata,
-            categories: existing.categories,
-            related_mods: existing.related_mods,
-        };
-        state.db.upsert_mod(&updated).map_err(|e| e.to_string())?;
-        let saved = state
-            .db
-            .get_mod_by_path(&existing.instance_id, &updated.file_path)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "Updated mod not found after save".to_string())?;
-        let instance_name = state
-            .db
-            .get_instance(&existing.instance_id)
-            .map_err(|e| e.to_string())?
-            .map(|instance| instance.name);
-        state
-            .db
-            .append_log(
-                "info",
-                &format!("Updated mod: {}", saved.file_name),
-                instance_name.as_deref(),
-            )
-            .map_err(|e| e.to_string())?;
-        Ok(saved)
-    })
-}
-
-#[command]
 pub async fn list_suggestion_modrinth_versions(
     suggestion_id: String,
     game_version: Option<String>,
@@ -367,72 +247,6 @@ pub async fn get_modrinth_project_details(
 }
 
 #[command]
-pub async fn install_suggestion_from_modrinth(
-    input: InstallSuggestionFromModrinthInput,
-) -> Result<ModFile, String> {
-    let bytes = download_bytes(&input.download_url)
-        .await
-        .map_err(|e| e.to_string())?;
-    if let Some(expected) = input.expected_sha256.as_deref() {
-        let actual = format!("{:x}", Sha256::digest(&bytes));
-        if !actual.eq_ignore_ascii_case(expected) {
-            return Err("Downloaded file did not match expected SHA-256 hash.".to_string());
-        }
-    }
-
-    with_state(|state| {
-        let suggestion = state
-            .db
-            .get_mod_suggestion_by_id(&input.suggestion_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "Suggestion not found".to_string())?;
-        let instance = state
-            .db
-            .get_instance(&suggestion.instance_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "Instance not found".to_string())?;
-        let mods_dir = Path::new(&instance.game_dir).join("mods");
-        std::fs::create_dir_all(&mods_dir).map_err(|e| e.to_string())?;
-
-        let safe_file_name = sanitize_file_name(&input.file_name);
-        let dest = mods_dir.join(&safe_file_name);
-        let temp = mods_dir.join(format!("{safe_file_name}.download"));
-        std::fs::write(&temp, &bytes).map_err(|e| e.to_string())?;
-        std::fs::rename(&temp, &dest).map_err(|e| e.to_string())?;
-
-        let metadata = suggestion
-            .metadata
-            .clone()
-            .or_else(|| parse_mod_jar(&dest).ok());
-        let mod_file = ModFile {
-            id: Uuid::new_v4().to_string(),
-            instance_id: suggestion.instance_id.clone(),
-            file_name: safe_file_name,
-            file_path: dest.to_string_lossy().to_string(),
-            installed_at: file_installed_at(&dest)
-                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
-            enabled: true,
-            hash_sha256: hash_file(&dest).ok(),
-            source_url: suggestion.source_url.clone(),
-            metadata,
-            categories: suggestion.categories.clone(),
-            related_mods: vec![],
-        };
-
-        state.db.upsert_mod(&mod_file).map_err(|e| e.to_string())?;
-        state
-            .db
-            .delete_mod_suggestion(&input.suggestion_id)
-            .map_err(|e| e.to_string())?;
-        state
-            .db
-            .get_mod_by_path(&suggestion.instance_id, &mod_file.file_path)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "Installed mod not found after save".to_string())
-    })
-}
-
-#[command]
 pub async fn append_update_log(
     instance_id: String,
     level: String,
@@ -449,13 +263,4 @@ pub async fn append_update_log(
             .append_log(&level, &message, instance_name.as_deref())
             .map_err(|e| e.to_string())
     })
-}
-
-fn sanitize_file_name(value: &str) -> String {
-    Path::new(value)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or("updated-mod.jar")
-        .to_string()
 }
