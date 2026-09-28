@@ -10,16 +10,16 @@ The target loop is:
 **Inspect → Diagnose → Change → Verify**
 
 ## Tasks
-- [ ] Connect Pack Health findings to safe remediation/change plans.
-- [ ] Connect crash investigation results to relevant update/removal/review workflows.
-- [ ] If a maintainer-confirmed issue states a fix exists in a newer compatible version, allow the user to review an update plan rather than automatically updating.
-- [ ] Embed dependency/relationship summaries into mod details with a deeper graph view available when useful.
-- [ ] Consolidate Scout/Mod Suggestions into a coherent analysis/recommendation experience.
-- [ ] Design a pack overview around actionable categories such as Compatibility, Dependencies, Integrity, Updates, Metadata, and Recent Diagnostics.
-- [ ] Reduce duplicate concepts/routes introduced by historical feature growth.
-- [ ] Split oversized frontend pages and backend modules by domain as the new boundaries become clear.
-- [ ] Ensure destructive filesystem operations and diagnostic pipelines have integration/regression coverage.
-- [ ] Update product documentation to describe the final workflow and evidence model.
+- [x] Connect Pack Health findings to safe remediation/change plans.
+- [x] Connect crash investigation results to relevant update/removal/review workflows.
+- [x] If a maintainer-confirmed issue states a fix exists in a newer compatible version, allow the user to review an update plan rather than automatically updating.
+- [x] Embed dependency/relationship summaries into mod details with a deeper graph view available when useful.
+- [x] Consolidate Scout/Mod Suggestions into a coherent analysis/recommendation experience.
+- [x] Design a pack overview around actionable categories such as Compatibility, Dependencies, Integrity, Updates, Metadata, and Recent Diagnostics.
+- [x] Reduce duplicate concepts/routes introduced by historical feature growth.
+- [x] Split oversized frontend pages and backend modules by domain as the new boundaries become clear.
+- [x] Ensure destructive filesystem operations and diagnostic pipelines have integration/regression coverage.
+- [x] Update product documentation to describe the final workflow and evidence model.
 
 ## Product principle
 Modly should help the user answer:
@@ -35,3 +35,11 @@ Modly should help the user answer:
 - Diagnostic findings can lead to reviewable actions without automatically mutating the pack.
 - The UI consistently distinguishes facts, warnings, inferences, community evidence, and unknowns.
 - The app reads as a **modpack manager with maintenance intelligence**, not a launcher or generic collection of Minecraft utilities.
+
+## Implementation notes
+
+Dashboard category cards deep-link to filtered Pack Health findings. Findings and crash leads link to mod details, compatible update checks, and the existing removal change-plan preview. A removal link only prepares the plan; applying it still requires explicit confirmation in the change dialog. Mod details show observed incoming and outgoing relationships alongside the user's manually mapped relationships, with a link to the graph.
+
+Community issue labels remain supporting evidence. A maintainer-labeled result links to the update workspace, where the saved provider check must identify a compatible, confirmed replacement before an update plan can be opened. The issue label alone never starts an update. If no saved result exists, the user can run Check Updates and review the original issue. The saved crash analysis remains a snapshot of the pack at analysis time.
+
+The sidebar has one Discover entry for Scout recommendations and saved suggestions; the original suggestions route remains available for existing links. Crash result cards and diagnostic persistence methods now live in focused modules. The existing change-plan filesystem regression tests and crash/community diagnostic tests cover the shared action and evidence pipelines.

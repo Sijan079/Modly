@@ -1,4 +1,6 @@
 import { useEffect, useId, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { ExternalLink, RotateCcw, Save } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -24,6 +26,7 @@ import type {
 } from "@/lib/types";
 import { formatLoader } from "@/lib/utils";
 import { normalizeSourceUrl } from "@/lib/mod-source-url";
+import { api } from "@/lib/api";
 
 const LOADERS: ModLoaderKind[] = [
   "fabric",
@@ -66,6 +69,11 @@ export function ModEditDialog({
   const [side, setSide] = useState<ModSide>("unknown");
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>([]);
   const [relatedMods, setRelatedMods] = useState<UpdateModRelationshipInput[]>([]);
+  const { data: declared, isPending: declaredPending, error: declaredError } = useQuery({
+    queryKey: ["mod-truth-relationships", mod?.instanceId, mod?.filePath],
+    queryFn: () => api.mods.truthRelationships(mod!.instanceId, mod!.filePath),
+    enabled: open && !!mod,
+  });
 
   useEffect(() => {
     if (!mod) return;
@@ -276,6 +284,10 @@ export function ModEditDialog({
             )}
           </div>
           <div className="space-y-3">
+            <div className="rounded-md border border-[var(--color-border)] p-3 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2"><strong>Declared relationships</strong><Link className="text-[var(--color-primary)] hover:underline" to={`/dependencies?mod=${encodeURIComponent(mod.filePath)}`} onClick={() => onOpenChange(false)}>Open graph</Link></div>
+              {declaredPending ? <p role="status">Loading relationships...</p> : declaredError ? <p role="alert">Could not load declared relationships.</p> : declared && <p className="mt-1 text-[var(--color-muted-foreground)]">{declared.outgoing.length} declared links; {declared.incoming.length} incoming references. {declared.requiredDependentPaths.length} required dependent paths. Review the graph before removal.</p>}
+            </div>
             <div className="flex items-center justify-between gap-2">
               <Label>Related Mods</Label>
               <Button

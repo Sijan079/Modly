@@ -10,6 +10,8 @@ use crate::models::category::{
     CreateCategoryInput, DeleteCategoryInput, DeleteCategoryMode, InstanceCategory,
 };
 use crate::models::change_plan::{ChangeBackup, ManualEdgeBackup};
+use crate::models::community::{CommunityIssue, IssueSource};
+use crate::models::crash::CrashAnalysis;
 use crate::models::instance::{CreateInstanceInput, Instance, LoaderType, UpdateInstanceInput};
 use crate::models::mod_metadata::{
     BulkUpdateModMetadataInput, ModFile, ModIntegrityAudit, ModIntegrityAuditStatus,
@@ -21,6 +23,8 @@ use crate::models::pack_item::{PackItem, PackItemMetadata, PackType, UpdatePackI
 use crate::models::scout::{ScoutAnalysis, ScoutRecommendationDecision, ScoutTarget};
 use crate::models::settings::AppSettings;
 use crate::models::updates::{SavedUpdateCheck, UpdateRow};
+
+mod diagnostics;
 
 pub struct Database {
     conn: Mutex<Connection>,
@@ -167,6 +171,33 @@ CREATE TABLE IF NOT EXISTS scout_recommendation_decisions (
     PRIMARY KEY (target_id, project_id)
 );
 
+CREATE TABLE IF NOT EXISTS crash_analyses (
+    instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+    fingerprint TEXT NOT NULL,
+    analyzed_at TEXT NOT NULL,
+    analysis_json TEXT NOT NULL,
+    PRIMARY KEY (instance_id, fingerprint)
+);
+
+CREATE TABLE IF NOT EXISTS issue_sources (
+    instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+    file_path TEXT NOT NULL,
+    project_id TEXT,
+    issue_url TEXT,
+    source_url TEXT,
+    repository TEXT,
+    provider TEXT NOT NULL,
+    checked_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    PRIMARY KEY (instance_id, file_path)
+);
+
+CREATE TABLE IF NOT EXISTS community_issue_cache (
+    cache_key TEXT PRIMARY KEY NOT NULL,
+    fetched_at TEXT NOT NULL,
+    issues_json TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_mods_instance ON mods(instance_id);
 CREATE INDEX IF NOT EXISTS idx_mod_suggestions_instance ON mod_suggestions(instance_id);
 CREATE INDEX IF NOT EXISTS idx_mod_suggestion_categories ON mod_suggestion_category_tags(suggestion_id);
@@ -176,6 +207,7 @@ CREATE INDEX IF NOT EXISTS idx_pack_items_instance ON pack_items(instance_id, pa
 CREATE INDEX IF NOT EXISTS idx_categories_instance ON instance_categories(instance_id);
 CREATE INDEX IF NOT EXISTS idx_logs_created ON logs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_scout_analyses_target ON scout_analyses(target_id, scanned_at DESC);
+CREATE INDEX IF NOT EXISTS idx_crash_analyses_instance ON crash_analyses(instance_id, analyzed_at DESC);
 "#;
 
 fn remove_legacy_launcher_data(conn: &mut Connection) -> Result<()> {
@@ -2122,6 +2154,114 @@ mod tests {
     fn test_db() -> Database {
         let dir = std::env::temp_dir().join(format!("modly-db-test-{}", Uuid::new_v4()));
         Database::new(dir).expect("db should initialize")
+    }
+
+    #[test]
+    fn crash_analysis_cache_is_scoped_to_instance_and_fingerprint() {
+        let db = test_db();
+        let instance = db
+            .create_instance(CreateInstanceInput {
+                name: "Crash test".into(),
+                game_dir: "C:\\crash-test".into(),
+                loader: LoaderType::Fabric,
+                mc_version: Some("1.20.1".into()),
+            })
+            .unwrap();
+        let analysis = CrashAnalysis {
+            fingerprint: "report-and-pack".into(),
+            instance_id: instance.id.clone(),
+            source_path: "crash.txt".into(),
+            analyzed_at: chrono::Utc::now().to_rfc3339(),
+            exception_type: Some("java.lang.IllegalStateException".into()),
+            exception_message: None,
+            stack_frames: vec![],
+            stack_namespaces: vec![],
+            unmapped_frames: vec![],
+            mentioned_mod_ids: vec![],
+            minecraft_version: None,
+            loader: Some("fabric".into()),
+            loader_version: None,
+            environment: vec![],
+            candidates: vec![],
+            recent_changes: vec![],
+        };
+        db.save_crash_analysis(&analysis).unwrap();
+        assert!(db
+            .get_crash_analysis(&instance.id, "different-pack")
+            .unwrap()
+            .is_none());
+        assert!(db
+            .get_crash_analysis("another-instance", &analysis.fingerprint)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            db.get_crash_analysis(&instance.id, &analysis.fingerprint)
+                .unwrap()
+                .unwrap()
+                .exception_type,
+            analysis.exception_type
+        );
+        assert_eq!(
+            db.get_latest_crash_analysis(&instance.id)
+                .unwrap()
+                .unwrap()
+                .fingerprint,
+            analysis.fingerprint
+        );
+    }
+
+    #[test]
+    fn issue_sources_and_search_results_are_saved_locally() {
+        let db = test_db();
+        let instance = db
+            .create_instance(CreateInstanceInput {
+                name: "Issue source test".into(),
+                game_dir: "C:\\issue-source-test".into(),
+                loader: LoaderType::Fabric,
+                mc_version: Some("1.20.1".into()),
+            })
+            .unwrap();
+        let source = IssueSource {
+            instance_id: instance.id.clone(),
+            file_path: "mods/alpha.jar".into(),
+            project_id: Some("alpha".into()),
+            issue_url: Some("https://github.com/acme/alpha/issues".into()),
+            source_url: Some("https://github.com/acme/alpha".into()),
+            repository: Some("acme/alpha".into()),
+            provider: "modrinth".into(),
+            checked_at: chrono::Utc::now().to_rfc3339(),
+            status: "github".into(),
+        };
+        db.save_issue_source(&source).unwrap();
+        assert_eq!(
+            db.get_issue_source(&instance.id, &source.file_path)
+                .unwrap()
+                .unwrap()
+                .repository,
+            source.repository
+        );
+        assert!(db
+            .get_issue_source(&instance.id, "mods/other.jar")
+            .unwrap()
+            .is_none());
+        let report = CommunityIssue {
+            candidate_file_path: source.file_path.clone(),
+            number: 42,
+            title: "Crash".into(),
+            url: "https://github.com/acme/alpha/issues/42".into(),
+            state: "open".into(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+            authority: "similar".into(),
+            duplicate_of: None,
+            similarities: vec!["Same exception type".into()],
+            differences: vec![],
+        };
+        db.save_community_issue_cache("query-a", &[report]).unwrap();
+        assert_eq!(
+            db.get_community_issue_cache("query-a").unwrap().unwrap().1[0].number,
+            42
+        );
+        assert!(db.get_community_issue_cache("query-b").unwrap().is_none());
     }
 
     fn seed_category_fixture(db: &Database) -> (String, String, String, String) {

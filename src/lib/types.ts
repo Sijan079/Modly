@@ -597,6 +597,55 @@ export interface Recommendation {
   evidenceWarning: string | null;
 }
 
+export interface CrashAnalysis {
+  fingerprint: string;
+  instanceId: string;
+  sourcePath: string;
+  analyzedAt: string;
+  exceptionType: string | null;
+  exceptionMessage: string | null;
+  stackFrames: string[];
+  stackNamespaces: string[];
+  unmappedFrames: string[];
+  mentionedModIds: string[];
+  minecraftVersion: string | null;
+  loader: string | null;
+  loaderVersion: string | null;
+  environment: { label: string; value: string }[];
+  candidates: { filePath: string; name: string; evidence: string[] }[];
+  recentChanges: string[];
+}
+
+export interface CommunitySearchResult {
+  fingerprint: string;
+  fetchedAt: string;
+  fromCache: boolean;
+  sources: {
+    instanceId: string;
+    filePath: string;
+    projectId: string | null;
+    issueUrl: string | null;
+    sourceUrl: string | null;
+    repository: string | null;
+    provider: string;
+    checkedAt: string;
+    status: string;
+  }[];
+  reports: {
+    candidateFilePath: string;
+    number: number;
+    title: string;
+    url: string;
+    state: string;
+    updatedAt: string;
+    authority: "maintainerLabeled" | "duplicate" | "similar" | "unverified";
+    duplicateOf: string | null;
+    similarities: string[];
+    differences: string[];
+  }[];
+  warnings: string[];
+}
+
 export interface CandidateVersionEvidence {
   versionId: string;
   versionNumber: string;

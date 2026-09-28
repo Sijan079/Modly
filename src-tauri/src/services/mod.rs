@@ -1,4 +1,6 @@
 pub mod change_plan;
+pub mod community;
+pub mod crash;
 pub mod database;
 pub mod hash_service;
 pub mod mod_parser;

@@ -8,8 +8,8 @@ Modly is a desktop modpack manager. It helps people understand, maintain, change
 | --- | --- | --- |
 | Understand | Inventory and explain pack contents and relationships. | Instance and folder discovery, mod and pack scans, metadata, categories, relationship graph, Scout analysis, local activity logs. |
 | Maintain | Keep existing packs healthy and portable. | Integrity audits, compatible update checks, config editing, resource pack/shader pack/datapack management, import, export, backup, duplication. |
-| Change Safely | Help people review and apply additions, updates, and removals with clear effects. | Mod suggestions, update matching and confirmation, filtered exports, category reassignment. Broader change planning belongs in later phases. |
-| Improve | Find useful additions and investigate problems. | Scout recommendations and source links. Crash investigation and community evidence are future scope. |
+| Change Safely | Help people review and apply additions, updates, and removals with clear effects. | Change-plan previews, dependency impact, backups and restore, update matching and confirmation, filtered exports, category reassignment. |
+| Improve | Find useful additions and investigate problems. | Discover recommendations and saved suggestions, local crash investigation, optional community issue evidence. |
 
 Modly owns pack metadata and files: mods, configs, resource packs, shader packs, and datapacks. It may read existing Minecraft directories and instances to discover packs. It keeps its own settings and records locally.
 

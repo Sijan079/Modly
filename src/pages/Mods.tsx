@@ -89,6 +89,7 @@ function ModsWorkspace({
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const linkedPath = searchParams.get("mod");
+  const linkedPlan = searchParams.get("plan");
   const selectedInstance = instances.find((instance) => instance.id === instanceId) ?? null;
 
   const { data: mods = [], isLoading } = useMods(instanceId);
@@ -108,6 +109,7 @@ function ModsWorkspace({
   const [filters, setFilters] = useState<ModListFilters>(defaultFilters);
   const [dragOver, setDragOver] = useState(false);
   const [editingMod, setEditingMod] = useState<ModFile | null>(null);
+  const [linkedNotice, setLinkedNotice] = useState<string | null>(null);
   const [selectedModIds, setSelectedModIds] = useState<string[]>([]);
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
@@ -122,10 +124,14 @@ function ModsWorkspace({
   useEffect(() => {
     if (!linkedPath || isLoading) return;
     const mod = mods.find((item) => item.filePath === linkedPath);
-    setModSearch(mod?.fileName ?? linkedPath.split(/[\/]/).pop() ?? linkedPath);
-    if (mod) setEditingMod(mod);
-    setSearchParams((params) => { params.delete("mod"); return params; }, { replace: true });
-  }, [linkedPath, isLoading, mods, setSearchParams]);
+    setModSearch(mod?.fileName ?? linkedPath.split(/[\\/]/).pop() ?? linkedPath);
+    if (mod) {
+      setLinkedNotice(null);
+      if (linkedPlan === "remove") setChangeRequests([{ kind: "remove", instanceId: mod.instanceId, targetModId: mod.id }]);
+      else setEditingMod(mod);
+    } else setLinkedNotice("This mod is no longer in the selected instance. Rescan the pack or choose its current file from the list.");
+    setSearchParams((params) => { params.delete("mod"); params.delete("plan"); return params; }, { replace: true });
+  }, [linkedPath, linkedPlan, isLoading, mods, setSearchParams]);
 
   const filteredMods = useMemo(
     () => filterMods(mods, modSearch, filters),
@@ -389,6 +395,7 @@ function ModsWorkspace({
           </>
         }
       />
+      {linkedNotice && <p role="status" className="rounded-md border border-[var(--color-border)] p-3 text-sm">{linkedNotice}</p>}
 
       <CategoryManager
         instanceId={instanceId}

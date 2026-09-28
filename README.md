@@ -5,55 +5,53 @@
 </p>
 
 <p align="center">
-  A desktop modpack manager for understanding, maintaining, and improving Minecraft packs in the folders you already use.
+  A desktop modpack manager for understanding and maintaining Minecraft packs in the folders you already use.
 </p>
 
-<p align="center">
-  <img alt="Tauri" src="https://img.shields.io/badge/Tauri-2.0-24C8DB?style=flat-square" />
-  <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=101827" />
-  <img alt="Rust" src="https://img.shields.io/badge/Rust-desktop-000000?style=flat-square&logo=rust" />
-  <img alt="SQLite" src="https://img.shields.io/badge/SQLite-local_data-003B57?style=flat-square&logo=sqlite" />
-</p>
+Modly inventories pack files, explains relationships and health findings, helps investigate crashes, and previews changes before applying them. It works with existing Minecraft instances; it does not launch the game, manage accounts, or install Java runtimes. See the [product boundary](docs/PRODUCT.md).
 
-Modly manages pack contents and metadata. It does not launch Minecraft or manage game accounts or Java runtimes. See [the product boundary](docs/PRODUCT.md).
+## Get Modly
 
-## Highlights
+Download a Windows `.msi` from [GitHub Releases](../../releases) when one is available. Install it, then add or import an existing Minecraft instance and point Modly at its game directory.
 
-- Create, duplicate, import, export, and organize Minecraft instances your way.
-- Sort installed mods faster, tag them, and filter what matters in seconds.
-- Explore a graph-first Relationships workspace powered by Cytoscape.js with pan, zoom, fit-to-view, search focus, and isolated-mod filtering.
-- Inspect declared dependencies and manual dependency or add-on links in the Relationships workspace.
-- Click any mod in the graph to edit its outgoing relationships in a lightweight table modal with add, save, and bulk-delete flows.
-- Save mod ideas as suggestions, preview their source pages, and turn them into installed mods when you're ready.
-- Use Modpack Scout to read installed JAR metadata from a managed instance or a selected local folder without changing the pack.
-- Check for compatible updates and install them with less guesswork.
-- Catch broken or missing mod files before they ruin a play session.
-- Manage DSR packs across resource packs, shader packs, and datapacks for each instance.
-- Override per-instance resource pack, shader pack, datapack, and config paths when a pack uses a non-default folder layout.
-- Delete instance categories safely by clearing affected mods or bulk-moving them into a replacement category.
-- Keep a simple local activity trail so it is easier to see what changed.
+Modly stores its settings, scans, and diagnostic history locally. Your mod JARs, configs, resource packs, shader packs, and datapacks stay in the instance folders you choose.
 
-## Install
+## Inspect → diagnose → change → verify
 
-Grab the latest `.msi` from the [GitHub Releases](../../releases) page, run it, and launch **Modly**.
+1. **Inspect.** Select an instance on the dashboard. Scan its files, then open Pack Health for findings grouped by compatibility, dependencies, integrity, updates, or metadata. The Relationships graph and each mod's details show declared and manually mapped links.
+2. **Diagnose.** Open a finding to see its evidence and certainty. In Logs, choose a Minecraft crash report or log to identify installed mods worth investigating. Local crash analysis works offline and keeps unmapped stack frames visible. A separate, optional search checks relevant public GitHub issues for those candidates.
+3. **Change.** From a finding or crash lead, inspect the mod, check compatible updates, or preview removal impact. Add, replace, update, and removal plans show the expected file operation and dependency effects before you confirm. Supported changes keep a backup and rescan the pack after applying.
+4. **Verify.** Recheck Pack Health after a change. If you are investigating a crash, analyze the report again against the current pack. A saved crash result describes the pack as it was when analyzed.
 
-## Local Data
+Findings describe what Modly can observe; no finding means no detected issue, not proof that a pack will launch. Dependency checks cannot establish save or world safety. A crash candidate or similar community report is a lead, not a confirmed cause. Community labels never start an update: the update workspace requires a confirmed, compatible provider result and a reviewable change plan.
 
-Modly keeps its settings and managed details on your device. Your Minecraft files stay in the instance folders you choose.
+## Improve a pack
 
-## Modpack Scout
+**Discover** runs Scout analysis on the selected instance and explains why an addition might fit. It checks available release evidence for the instance's Minecraft version and loader, and flags missing dependencies or declared conflicts where possible. Performance effects and other unsupported claims remain unknown. Save a recommendation to **Saved suggestions** for later review; saving does not install it. Provider searches require a network connection.
 
-Modpack Scout is a read-only Modly module for inspecting a modpack and finding additions that fit it. Choose an existing Modly instance or browse to a Minecraft root (or its `mods` directory), then select **Analyze Pack**.
-
-The initial scanner reads `META-INF/neoforge.mods.toml`, `META-INF/mods.toml`, `fabric.mod.json`, and legacy `mcmod.info` files inside mod JARs. It records installed mod IDs, names, versions, loaders, and declared dependencies in Modly's local SQLite database. Malformed JARs are reported without stopping the scan.
-
-Scout never writes to the selected pack's `mods`, `config`, `saves`, or `worlds` folders. Its recommendation search uses Modrinth's official API and requires a feature or theme query. Results are restricted to the detected Minecraft version and loader, exclude obvious installed matches, and are cached locally for six hours. Scout ranks them with an explainable score for theme fit, search-goal fit, installed ecosystem references, maintenance, category overlap, and basic performance risk. Candidate dependency and conflict checks are not implemented yet and are shown as unevaluated rather than inferred.
+Modly also supports instance import, duplication, and ZIP export; mod categories and metadata edits; config editing; compatible update checks; and resource pack, shader pack, and datapack management. You can set custom content and config paths per instance.
 
 ## Development
 
-Run the desktop app locally with:
+The desktop app uses Tauri, Rust, React, TypeScript, and SQLite. With the platform prerequisites for Tauri installed:
 
 ```bash
-npm install
+npm ci
 npm run tauri dev
 ```
+
+Run the frontend build and automated checks with:
+
+```bash
+npm run build
+npm run test:health
+cargo test --manifest-path src-tauri/Cargo.toml --lib
+```
+
+For a distributable desktop build, follow the [versioning and release checklist](docs/VERSIONING.md) before running `npm run tauri build`.
+
+## Design and architecture
+
+- [Product boundary](docs/PRODUCT.md): what Modly owns and excludes.
+- [Architecture phases](docs/architecture/phase-0.md): the implementation path from launcher cleanup through diagnostic workflows. Continue through the numbered phase documents for details.
+- [Versioning](docs/VERSIONING.md): SemVer and release artifact checks.

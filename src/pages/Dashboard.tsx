@@ -25,6 +25,7 @@ import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ExportZipDialog } from "@/components/instances/ExportZipDialog";
 import { PageShell } from "@/components/layout/PageShell";
+import { PackOverview } from "@/components/dashboard/PackOverview";
 import { useCategories } from "@/hooks/useCategories";
 import { useInstances } from "@/hooks/useInstances";
 import { useCheckModIntegrity, useLatestModIntegrityAudit, useMods } from "@/hooks/useMods";
@@ -105,6 +106,7 @@ export function DashboardPage() {
       await Promise.allSettled([
         queryClient.invalidateQueries({ queryKey: ["instances"] }),
         queryClient.invalidateQueries({ queryKey: ["mods", instance.id] }),
+        queryClient.invalidateQueries({ queryKey: ["pack-health", instance.id] }),
         queryClient.invalidateQueries({ queryKey: ["packs", instance.id] }),
         queryClient.invalidateQueries({
           queryKey: ["dashboard-scan-summary", instance.gameDir],
@@ -187,7 +189,7 @@ export function DashboardPage() {
     <div className="space-y-5">
       <PageShell
         title="Dashboard"
-        description="Overview and export"
+        description="Inspect, diagnose, plan changes, and verify your pack"
       />
 
       {instancesLoading ? (
@@ -274,6 +276,8 @@ export function DashboardPage() {
               </div>
             </CardContent>
           </Card>
+
+          <PackOverview instance={selectedInstance} />
 
           <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
             <Card>

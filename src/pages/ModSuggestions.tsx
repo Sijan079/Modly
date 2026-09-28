@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Ellipsis, ExternalLink, FolderOpen, Lightbulb, Pencil, Plus, Save, Trash2, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -428,10 +429,11 @@ export function ModSuggestionsPage() {
   return (
     <div className="flex flex-col gap-5">
       <PageShell
-        title="Mod Suggestions"
-        description={`Save projects from Scout or add your own to review before installation - ${filteredSuggestions.length} of ${suggestions.length} shown${matchedSuggestionCount > 0 ? ` · ${matchedSuggestionCount} already installed` : ""}`}
+        title="Saved suggestions"
+        description={`Review additions before installation - ${filteredSuggestions.length} of ${suggestions.length} shown${matchedSuggestionCount > 0 ? ` · ${matchedSuggestionCount} already installed` : ""}`}
         controls={
           <>
+            <Button variant="outline" asChild><Link to="/scout">Back to Discover</Link></Button>
             <ThemedSelect
               className="min-w-[11rem]"
               value={instanceId ?? ""}

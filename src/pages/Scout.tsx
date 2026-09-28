@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { RefreshCw, ScanSearch, TriangleAlert } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -136,8 +137,8 @@ export function ScoutPage() {
   return (
     <div className="flex flex-col gap-5">
       <PageShell
-        title="Modpack Scout"
-        description="Analyze a local Minecraft modpack without changing its files."
+        title="Discover"
+        description="Analyze installed mods, find compatible additions, and save ideas for review."
         controls={
           <>
             <ThemedSelect
@@ -151,6 +152,7 @@ export function ScoutPage() {
               {analyze.isPending ? <RefreshCw className="h-4 w-4 animate-spin" /> : <ScanSearch className="h-4 w-4" />}
               {analyze.isPending ? "Analyzing..." : "Analyze Pack"}
             </Button>
+            <Button variant="outline" asChild><Link to="/mod-suggestions">Saved suggestions</Link></Button>
           </>
         }
       />

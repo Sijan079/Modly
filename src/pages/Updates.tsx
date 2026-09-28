@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   Check,
   Download,
@@ -48,6 +49,8 @@ type CheckProgress = {
 };
 
 export function UpdatesPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const linkedPath = searchParams.get("mod");
   const { data: instances = [] } = useInstances();
   const { selectedInstanceId, setSelectedInstance } = useAppStore();
   const instanceId = selectedInstanceId ?? instances[0]?.id ?? null;
@@ -69,6 +72,7 @@ export function UpdatesPage() {
     fileName: "",
   });
   const [runError, setRunError] = useState<string | null>(null);
+  const [linkedNotice, setLinkedNotice] = useState<string | null>(null);
   const [loadingSavedCheck, setLoadingSavedCheck] = useState(true);
   const [changeRequests, setChangeRequests] = useState<ChangeRequest[]>([]);
 
@@ -138,9 +142,19 @@ export function UpdatesPage() {
     };
   }, [instanceId]);
 
+  useEffect(() => {
+    if (!linkedPath || loadingSavedCheck) return;
+    const row = rows.find((item) => item.filePath === linkedPath);
+    setSearch(row?.fileName ?? linkedPath.split(/[\\/]/).pop() ?? linkedPath);
+    if (row) setActiveRow(row);
+    setLinkedNotice(row ? null : "No saved update result for this mod. Run Check Updates to look for a compatible release.");
+    setSearchParams((params) => { params.delete("mod"); return params; }, { replace: true });
+  }, [linkedPath, loadingSavedCheck, rows, setSearchParams]);
+
   const handleCheck = async () => {
     if (!instanceId || checkProgress.active) return;
 
+    setLinkedNotice(null);
     cancelCheckRef.current = false;
     setRunError(null);
     setSelectedIds(new Set());
@@ -288,6 +302,7 @@ export function UpdatesPage() {
           {runError}
         </div>
       )}
+      {linkedNotice && <p role="status" className="rounded-md border border-[var(--color-border)] p-3 text-sm">{linkedNotice}</p>}
 
       <PageToolbar
         search={
@@ -667,6 +682,8 @@ function canReplaceArtifact(row: UpdateRow) {
     !!row.latestFile &&
     !!row.latestVersionId &&
     !!row.projectId &&
+    row.matchConfidence === "exact" &&
+    row.confirmed &&
     row.itemType === "mod"
   );
 }

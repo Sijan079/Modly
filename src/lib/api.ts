@@ -6,6 +6,8 @@ import type {
   ExportModsZipInput,
   Instance,
   LogEntry,
+  CrashAnalysis,
+  CommunitySearchResult,
   MinecraftScanResult,
   ModFile,
   PackTruth,
@@ -49,6 +51,11 @@ import type {
 } from "./types";
 
 export const api = {
+  crash: {
+    analyze: (instanceId: string, sourcePath: string) => invoke<CrashAnalysis>("analyze_crash_report", { instanceId, sourcePath }),
+    latest: (instanceId: string) => invoke<CrashAnalysis | null>("get_latest_crash_analysis", { instanceId }),
+    community: (instanceId: string, fingerprintKey: string) => invoke<CommunitySearchResult>("search_crash_community", { instanceId, fingerprintKey }),
+  },
   changes: {
     preview: (request: ChangeRequest) => invoke<ChangePlan>("preview_mod_change", { request }),
     apply: (planId: string) => invoke<ChangeApplyResult>("apply_mod_change", { planId }),

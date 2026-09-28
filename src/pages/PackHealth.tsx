@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { Activity, RefreshCw } from "lucide-react";
 import { PageShell } from "@/components/layout/PageShell";
 import { Card, CardContent } from "@/components/ui/card";
@@ -21,10 +21,12 @@ const certaintyLabel = {
 };
 
 export function PackHealthPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const { data: instances = [] } = useInstances();
   const { selectedInstanceId, setSelectedInstance } = useAppStore();
   const instance = instances.find((item) => item.id === selectedInstanceId) ?? instances[0];
-  const [category, setCategory] = useState<HealthCategory | "All">("All");
+  const selectedCategory = searchParams.get("category");
+  const category: HealthCategory | "All" = categories.find((item) => item === selectedCategory) ?? "All";
   const { data, isPending, isFetching, error, refetch } = useQuery({
     queryKey: ["pack-health", instance?.id, instance?.loader, instance?.mcVersion],
     enabled: !!instance,
@@ -56,7 +58,7 @@ export function PackHealthPage() {
           <p className="text-sm text-[var(--color-muted-foreground)]">No detected findings does not guarantee that a pack is safe or will launch. Unsupported metadata and unobserved runtime behavior remain unknown. Disabled JARs are excluded.</p>
         </CardContent></Card>
         <div className="flex flex-wrap gap-2" role="group" aria-label="Filter health findings">
-          {(["All", ...categories] as const).map((item) => <Button key={item} variant={category === item ? "secondary" : "outline"} aria-pressed={category === item} onClick={() => setCategory(item)}>{item}{item !== "All" ? ` (${data.findings.filter((finding) => finding.category === item).length})` : ""}</Button>)}
+          {(["All", ...categories] as const).map((item) => <Button key={item} variant={category === item ? "secondary" : "outline"} aria-pressed={category === item} onClick={() => setSearchParams((params) => { if (item === "All") params.delete("category"); else params.set("category", item); return params; })}>{item}{item !== "All" ? ` (${data.findings.filter((finding) => finding.category === item).length})` : ""}</Button>)}
         </div>
         {visible.length === 0 ? <Card><CardContent className="pt-6 text-sm text-[var(--color-muted-foreground)]">No findings in this category. This does not confirm compatibility.</CardContent></Card> :
           <div className="space-y-3">{visible.map((finding) => <FindingCard key={finding.id} finding={finding} instanceId={instance.id} />)}</div>}
@@ -80,7 +82,8 @@ function FindingCard({ finding, instanceId }: { finding: HealthFinding; instance
     <div className="flex flex-wrap gap-3 text-sm">
       {finding.filePaths.map((path, index) => <Link className="text-[var(--color-primary)] underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]" key={path} to={`/mods?mod=${encodeURIComponent(path)}`}>View {index === 0 ? "mod" : "affected mod"}</Link>)}
       {finding.filePaths.length > 0 && <Button variant="outline" aria-expanded={showRelationships} onClick={() => setShowRelationships((value) => !value)}>{showRelationships ? "Hide" : "View"} declared relationships</Button>}
-      {finding.category === "Updates" && <Link className="text-[var(--color-primary)] underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]" to="/updates">Review update</Link>}
+      {finding.filePaths.length === 1 && finding.certainty !== "unknown" && <Link className="text-[var(--color-primary)] underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]" to={`/mods?mod=${encodeURIComponent(finding.filePaths[0])}&plan=remove`}>Review removal impact</Link>}
+      {finding.filePaths.length > 0 && <Link className="text-[var(--color-primary)] underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]" to={`/updates?mod=${encodeURIComponent(finding.filePaths[0])}`}>Check compatible updates</Link>}
     </div>
     {showRelationships && <div className="rounded-md border border-[var(--color-border)] p-3 text-sm">
       <strong>Declared relationships for {finding.filePaths[0]}</strong>
