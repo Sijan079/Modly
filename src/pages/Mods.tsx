@@ -90,6 +90,7 @@ function ModsWorkspace({
   const [searchParams, setSearchParams] = useSearchParams();
   const linkedPath = searchParams.get("mod");
   const linkedPlan = searchParams.get("plan");
+  const linkedCrash = searchParams.get("crash");
   const selectedInstance = instances.find((instance) => instance.id === instanceId) ?? null;
 
   const { data: mods = [], isLoading } = useMods(instanceId);
@@ -123,15 +124,32 @@ function ModsWorkspace({
   const [dismissedAuditAt, setDismissedAuditAt] = useState<string | null>(null);
   useEffect(() => {
     if (!linkedPath || isLoading) return;
+    let cancelled = false;
     const mod = mods.find((item) => item.filePath === linkedPath);
     setModSearch(mod?.fileName ?? linkedPath.split(/[\\/]/).pop() ?? linkedPath);
-    if (mod) {
-      setLinkedNotice(null);
-      if (linkedPlan === "remove") setChangeRequests([{ kind: "remove", instanceId: mod.instanceId, targetModId: mod.id }]);
-      else setEditingMod(mod);
-    } else setLinkedNotice("This mod is no longer in the selected instance. Rescan the pack or choose its current file from the list.");
-    setSearchParams((params) => { params.delete("mod"); params.delete("plan"); return params; }, { replace: true });
-  }, [linkedPath, linkedPlan, isLoading, mods, setSearchParams]);
+    const openLinked = async () => {
+      if (!mod) setLinkedNotice("This mod is no longer in the selected instance. Rescan the pack or choose its current file from the list.");
+      else if (linkedPlan === "remove") {
+        if (linkedCrash) {
+          setLinkedNotice("Checking the crash snapshot against the current pack...");
+          try {
+            if (!await api.crash.validate(mod.instanceId, linkedCrash)) {
+              if (!cancelled) setLinkedNotice("The crash snapshot is stale. Analyze the report again before reviewing removal.");
+              return;
+            }
+          } catch {
+            if (!cancelled) setLinkedNotice("Could not verify the crash snapshot. Analyze the report again before reviewing removal.");
+            return;
+          }
+        }
+        if (!cancelled) { setLinkedNotice(null); setChangeRequests([{ kind: "remove", instanceId: mod.instanceId, targetModId: mod.id }]); }
+      } else if (!cancelled) { setLinkedNotice(null); setEditingMod(mod); }
+    };
+    void openLinked().finally(() => {
+      if (!cancelled) setSearchParams((params) => { params.delete("mod"); params.delete("plan"); params.delete("crash"); return params; }, { replace: true });
+    });
+    return () => { cancelled = true; };
+  }, [linkedPath, linkedPlan, linkedCrash, isLoading, mods, setSearchParams]);
 
   const filteredMods = useMemo(
     () => filterMods(mods, modSearch, filters),
@@ -494,11 +512,11 @@ function ModsWorkspace({
       {changeRequests.length > 0 && <ChangePlanDialog requests={changeRequests} instance={selectedInstance} onClose={() => setChangeRequests([])} onApplied={() => { void queryClient.invalidateQueries(); }} />}
       <Dialog open={backupsOpen} onOpenChange={(open) => { setBackupsOpen(open); if (!open) setRestoreTarget(null); }}>
         <DialogContent className="max-w-lg">
-          <DialogHeader><DialogTitle>Restore mod change</DialogTitle><DialogDescription>Choose an applied change to restore its original JAR and saved metadata.</DialogDescription></DialogHeader>
+          <DialogHeader><DialogTitle>Restore mod change</DialogTitle><DialogDescription>Review applied changes and interrupted operations before restoring files and metadata.</DialogDescription></DialogHeader>
           {backupError && <p role="alert" className="text-sm text-[var(--color-destructive)]">{backupError}</p>}
           {backups.length === 0 && <p className="text-sm text-[var(--color-muted-foreground)]">No restorable changes.</p>}
-          {backups.map((backup) => <div key={backup.id} className="flex items-center justify-between gap-3 border-t border-[var(--color-border)] py-2 text-sm"><span>{backup.kind} · {backup.oldMod?.fileName ?? backup.newMod?.fileName}<br />{new Date(backup.createdAt).toLocaleString()}</span><Button variant="outline" onClick={() => setRestoreTarget(backup)}>Review</Button></div>)}
-          {restoreTarget && <div className="space-y-2 rounded-md border border-[var(--color-border)] p-3 text-sm"><strong>Restore {restoreTarget.oldMod?.fileName ?? restoreTarget.newMod?.fileName}</strong>{restoreTarget.newFilePath && <p>Remove current file: <code className="break-all">{restoreTarget.newFilePath}</code></p>}{restoreTarget.oldFilePath && <p>Restore original file: <code className="break-all">{restoreTarget.oldFilePath}</code></p>}<p className="text-[var(--color-muted-foreground)]">Current files must still match this backup. Dependency and world safety require review after restoration.</p><div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setRestoreTarget(null)}>Cancel</Button><Button onClick={() => restoreBackup(restoreTarget.id)}>Restore original</Button></div></div>}
+          {backups.map((backup) => <div key={backup.id} className="flex items-center justify-between gap-3 border-t border-[var(--color-border)] py-2 text-sm"><span>{backup.kind} · {backup.oldMod?.fileName ?? backup.newMod?.fileName}<br /><Badge variant={backup.status === "rollbackFailed" ? "destructive" : "outline"}>{backup.status === "rollbackFailed" ? "Rollback incomplete" : backup.status === "pending" ? "Interrupted or in progress" : "Applied"}</Badge> · {new Date(backup.createdAt).toLocaleString()}</span><Button variant="outline" onClick={() => setRestoreTarget(backup)}>Review</Button></div>)}
+          {restoreTarget && <div className="space-y-2 rounded-md border border-[var(--color-border)] p-3 text-sm"><strong>Restore {restoreTarget.oldMod?.fileName ?? restoreTarget.newMod?.fileName}</strong>{restoreTarget.status !== "applied" && <p role="alert">This operation did not reach a verified applied state. Inspect the listed files before restoring; Modly will refuse to overwrite changed files.</p>}{restoreTarget.newFilePath && <p>Remove current file: <code className="break-all">{restoreTarget.newFilePath}</code></p>}{restoreTarget.oldFilePath && <p>Restore original file: <code className="break-all">{restoreTarget.oldFilePath}</code></p>}<p className="text-[var(--color-muted-foreground)]">Current files must still match this backup. Dependency and world safety require review after restoration.</p><div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setRestoreTarget(null)}>Cancel</Button><Button onClick={() => restoreBackup(restoreTarget.id)}>Restore original</Button></div></div>}
         </DialogContent>
       </Dialog>
 

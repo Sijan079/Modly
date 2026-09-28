@@ -1,0 +1,6 @@
+# Bundled third-party design skill is tooling, not Modly application code.
+.agents/skills/ui-ux-pro-max/** linguist-vendored
+
+# Project helper and JavaScript test harness are excluded from language totals.
+.codex/start-modly.ps1 -linguist-detectable
+tests/*.test.mjs -linguist-detectable

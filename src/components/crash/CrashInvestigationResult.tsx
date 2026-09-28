@@ -6,7 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import type { CrashAnalysis, CommunitySearchResult } from "@/lib/types";
 import { formatDate } from "@/lib/utils";
 
-export function CrashResult({ analysis }: { analysis: CrashAnalysis }) {
+export function CrashResult({ analysis, current }: { analysis: CrashAnalysis; current: boolean }) {
   return <div className="space-y-4">
     <Card><CardContent className="space-y-3 pt-5">
       <div className="flex flex-wrap items-center gap-2"><Badge variant="outline">Local analysis</Badge><span className="text-xs text-[var(--color-muted-foreground)]">{formatDate(analysis.analyzedAt)}</span></div>
@@ -21,7 +21,7 @@ export function CrashResult({ analysis }: { analysis: CrashAnalysis }) {
     <div className="space-y-2"><h3 className="font-semibold">Worth investigating ({analysis.candidates.length})</h3>
       {analysis.candidates.length === 0 ? <Card><CardContent className="pt-5 text-sm">Insufficient evidence to connect the report to an installed mod.</CardContent></Card> :
         analysis.candidates.map((candidate) => <Card key={candidate.filePath}><CardContent className="space-y-2 pt-5">
-          <div className="flex flex-wrap justify-between gap-2"><h4 className="font-medium">{candidate.name}</h4><div className="flex flex-wrap gap-3 text-sm"><Link className="text-[var(--color-primary)] hover:underline" to={`/mods?mod=${encodeURIComponent(candidate.filePath)}`}>View mod</Link><Link className="text-[var(--color-primary)] hover:underline" to={`/mods?mod=${encodeURIComponent(candidate.filePath)}&plan=remove`}>Review removal impact</Link><Link className="text-[var(--color-primary)] hover:underline" to={`/updates?mod=${encodeURIComponent(candidate.filePath)}`}>Check updates</Link></div></div>
+          <div className="flex flex-wrap justify-between gap-2"><h4 className="font-medium">{candidate.name}</h4><div className="flex flex-wrap gap-3 text-sm"><Link className="text-[var(--color-primary)] hover:underline" to={`/mods?mod=${encodeURIComponent(candidate.filePath)}`}>View mod</Link>{current && <><Link className="text-[var(--color-primary)] hover:underline" to={`/mods?mod=${encodeURIComponent(candidate.filePath)}&plan=remove&crash=${encodeURIComponent(analysis.fingerprint)}`}>Review removal impact</Link><Link className="text-[var(--color-primary)] hover:underline" to={`/updates?mod=${encodeURIComponent(candidate.filePath)}&crash=${encodeURIComponent(analysis.fingerprint)}`}>Check updates</Link></>}</div></div>
           <ul className="list-disc space-y-1 pl-5 text-sm text-[var(--color-muted-foreground)]">{candidate.evidence.map((reason) => <li key={reason} className="break-all">{reason}</li>)}</ul>
         </CardContent></Card>)}
     </div>
@@ -32,9 +32,9 @@ export function CrashResult({ analysis }: { analysis: CrashAnalysis }) {
   </div>;
 }
 
-export function CommunityResults({ result, analysis }: { result: CommunitySearchResult; analysis: CrashAnalysis }) {
+export function CommunityResults({ result, analysis, current }: { result: CommunitySearchResult; analysis: CrashAnalysis; current: boolean }) {
   const authorityLabel = {
-    maintainerLabeled: "Maintainer-labeled issue or fix",
+    maintainerLabeled: "Repository-labeled issue",
     duplicate: "Marked duplicate",
     similar: "Similar community report",
     unverified: "Unverified report",
@@ -51,7 +51,7 @@ export function CommunityResults({ result, analysis }: { result: CommunitySearch
         <div className="grid gap-3 text-sm sm:grid-cols-2"><div><strong>Similarities</strong><ul className="mt-1 list-disc pl-5">{issue.similarities.map((value) => <li key={value}>{value}</li>)}</ul></div>
           <div><strong>Differences</strong>{issue.differences.length ? <ul className="mt-1 list-disc pl-5">{issue.differences.map((value) => <li key={value}>{value}</li>)}</ul> : <p className="mt-1 text-[var(--color-muted-foreground)]">None detected in the issue text.</p>}</div></div>
         <p className="text-xs text-[var(--color-muted-foreground)]">Similarity does not confirm the cause of this crash.</p>
-        <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => void openUrl(issue.url)}>View original issue</Button>{issue.duplicateOf && <Button variant="ghost" onClick={() => void openUrl(issue.duplicateOf!)}>View referenced report</Button>}{issue.authority === "maintainerLabeled" && <Button variant="outline" asChild><Link to={`/updates?mod=${encodeURIComponent(issue.candidateFilePath)}`}>Check compatible update</Link></Button>}</div>
+        <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => void openUrl(issue.url)}>View original issue</Button>{issue.duplicateOf && <Button variant="ghost" onClick={() => void openUrl(issue.duplicateOf!)}>View referenced report</Button>}{current && issue.authority === "maintainerLabeled" && <Button variant="outline" asChild><Link to={`/updates?mod=${encodeURIComponent(issue.candidateFilePath)}&crash=${encodeURIComponent(analysis.fingerprint)}`}>Check compatible update</Link></Button>}</div>
       </CardContent></Card>;
     })}
     {result.sources.filter((source) => source.issueUrl).length > 0 && <div className="space-y-1 text-sm"><h4 className="font-medium">Issue sources checked</h4>{result.sources.filter((source) => source.issueUrl).map((source) => <div key={source.filePath} className="flex flex-wrap items-center gap-2"><span>{analysis.candidates.find((item) => item.filePath === source.filePath)?.name ?? source.filePath}</span><Badge variant="outline">{source.status}</Badge><Button variant="ghost" onClick={() => void openUrl(source.issueUrl!)}>Open issue tracker</Button></div>)}</div>}

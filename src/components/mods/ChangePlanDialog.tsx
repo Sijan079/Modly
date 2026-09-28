@@ -88,7 +88,7 @@ export function ChangePlanDialog({ requests, instance, onClose, onApplied }: {
           </DialogDescription>
         </DialogHeader>
         {busy && <p className="text-sm text-[var(--color-muted-foreground)]">{plan ? "Applying and rescanning…" : "Validating candidate and preparing review…"}</p>}
-        {error && <div role="alert" className="rounded-md border border-[var(--color-destructive)] p-3 text-sm text-[var(--color-destructive)]">{error}{completed > 0 && <p>{completed} earlier change(s) succeeded; review the pack before retrying.</p>}</div>}
+        {error && <div role="alert" className="rounded-md border border-[var(--color-destructive)] p-3 text-sm text-[var(--color-destructive)]">{error}{completed > 0 && <p>{completed} earlier change(s) succeeded; review the pack before retrying.</p>}{error.includes("Backup ID") && <p className="mt-2">Open Mods → Tools → Restore mod change to inspect the saved recovery point.</p>}</div>}
         {plan && <div className="space-y-4 text-sm">
           <div className="rounded-md border border-[var(--color-border)] p-3">
             <div className="mb-2 flex items-center gap-2"><Badge>{plan.kind}</Badge><strong>{plan.candidate?.name ?? (plan.oldFilePath ? name(plan.oldFilePath) : "Mod")}</strong></div>

@@ -3,6 +3,7 @@ use std::sync::OnceLock;
 
 use tauri::Manager;
 
+use crate::services::change_plan::cleanup_abandoned_stages;
 use crate::services::database::Database;
 
 pub struct AppState {
@@ -27,6 +28,9 @@ pub fn init_state(app_handle: &tauri::AppHandle) -> Result<(), String> {
             app_data_dir.display()
         )
     })?;
+    for warning in cleanup_abandoned_stages(&db).map_err(|error| error.to_string())? {
+        let _ = db.append_log("warn", &warning, None);
+    }
     APP_STATE
         .set(AppState { db, app_data_dir })
         .map_err(|_| "App state already initialized".to_string())?;

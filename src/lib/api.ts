@@ -54,6 +54,7 @@ export const api = {
   crash: {
     analyze: (instanceId: string, sourcePath: string) => invoke<CrashAnalysis>("analyze_crash_report", { instanceId, sourcePath }),
     latest: (instanceId: string) => invoke<CrashAnalysis | null>("get_latest_crash_analysis", { instanceId }),
+    validate: (instanceId: string, fingerprintKey: string) => invoke<boolean>("validate_crash_analysis", { instanceId, fingerprintKey }),
     community: (instanceId: string, fingerprintKey: string) => invoke<CommunitySearchResult>("search_crash_community", { instanceId, fingerprintKey }),
   },
   changes: {

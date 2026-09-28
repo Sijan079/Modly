@@ -30,14 +30,22 @@ pub async fn preview_mod_change(request: ChangeRequest) -> Result<ChangePlan, St
     } else {
         None
     };
-    with_state(|state| {
-        preview_change(state, request, downloaded).map_err(|error| error.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        with_state(|state| {
+            preview_change(state, request, downloaded).map_err(|error| error.to_string())
+        })
     })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[command]
 pub async fn apply_mod_change(plan_id: String) -> Result<ChangeApplyResult, String> {
-    with_state(|state| apply_change(state, &plan_id).map_err(|error| error.to_string()))
+    tauri::async_runtime::spawn_blocking(move || {
+        with_state(|state| apply_change(state, &plan_id).map_err(|error| error.to_string()))
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[command]
@@ -55,7 +63,11 @@ pub async fn restore_mod_change(
     instance_id: String,
     backup_id: String,
 ) -> Result<ChangeRestoreResult, String> {
-    with_state(|state| {
-        restore_backup(state, &instance_id, &backup_id).map_err(|error| error.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        with_state(|state| {
+            restore_backup(state, &instance_id, &backup_id).map_err(|error| error.to_string())
+        })
     })
+    .await
+    .map_err(|error| error.to_string())?
 }

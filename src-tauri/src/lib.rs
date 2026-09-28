@@ -12,7 +12,7 @@ use commands::change_plan::{
     restore_mod_change,
 };
 use commands::community::search_crash_community;
-use commands::crash::{analyze_crash_report, get_latest_crash_analysis};
+use commands::crash::{analyze_crash_report, get_latest_crash_analysis, validate_crash_analysis};
 use commands::files::{
     append_log, copy_file, delete_file, get_app_data_dir, hash_file_sha256, list_directory,
     list_logs, move_file, open_in_explorer,
@@ -81,6 +81,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             analyze_crash_report,
             get_latest_crash_analysis,
+            validate_crash_analysis,
             search_crash_community,
             preview_mod_change,
             apply_mod_change,

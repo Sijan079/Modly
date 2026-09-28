@@ -33,6 +33,11 @@ export function LogsPage() {
     queryFn: () => api.crash.latest(instance!.id),
   });
   const analysis = active?.instanceId === instance?.id ? active : saved;
+  const { data: analysisCurrent, isPending: checkingSnapshot, error: snapshotError } = useQuery({
+    queryKey: ["crash-current", instance?.id, analysis?.fingerprint],
+    enabled: !!instance && !!analysis,
+    queryFn: () => api.crash.validate(instance!.id, analysis!.fingerprint),
+  });
   const chooseReport = async () => {
     if (!instance || analyzing) return;
     try {
@@ -52,7 +57,7 @@ export function LogsPage() {
     }
   };
   const findCommunityReports = async () => {
-    if (!instance || !analysis || searchingCommunity) return;
+    if (!instance || !analysis || analysisCurrent !== true || searchingCommunity) return;
     setSearchingCommunity(true);
     setCommunityError(null);
     try {
@@ -98,13 +103,16 @@ export function LogsPage() {
           <Card><CardContent className="pt-5 text-sm">Add an instance before investigating a crash.</CardContent></Card> :
           loadingSaved ? <p role="status" className="text-sm text-[var(--color-muted-foreground)]">Loading saved investigation...</p> :
           savedError ? <Card><CardContent className="flex flex-wrap items-center gap-3 pt-5 text-sm" role="alert">Could not load the saved investigation. <Button variant="outline" onClick={() => void reloadSaved()}>Try again</Button></CardContent></Card> :
-          analysis ? <><CrashResult analysis={analysis} />
+          analysis ? <>{checkingSnapshot && <p role="status" className="text-sm">Checking whether this saved analysis matches the current pack...</p>}
+            {snapshotError && <p role="alert" className="text-sm">Could not verify this saved analysis. Choose the report again before using its actions.</p>}
+            {analysisCurrent === false && <p role="alert" className="rounded-md border border-[var(--color-border)] p-3 text-sm">The report or pack changed since this analysis. Choose the report again to refresh investigation leads and actions.</p>}
+            <CrashResult analysis={analysis} current={analysisCurrent === true} />
             <section aria-labelledby="community-heading" className="space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 id="community-heading" className="font-semibold">Community reports</h3><p className="text-sm text-[var(--color-muted-foreground)]">Search issue trackers for up to five local investigation candidates. Reports are supporting evidence only.</p></div>
-                <Button variant="outline" onClick={() => void findCommunityReports()} disabled={searchingCommunity || analysis.candidates.length === 0}>{searchingCommunity ? "Searching..." : "Search community reports"}</Button></div>
+                <Button variant="outline" onClick={() => void findCommunityReports()} disabled={searchingCommunity || analysisCurrent !== true || analysis.candidates.length === 0}>{searchingCommunity ? "Searching..." : "Search community reports"}</Button></div>
               {communityError && <Card><CardContent className="pt-5 text-sm" role="alert">Could not search community reports: {communityError} Reanalyze the report if the pack changed, then try again.</CardContent></Card>}
               {searchingCommunity && <p role="status" aria-busy="true" className="text-sm text-[var(--color-muted-foreground)]">Checking provider issue links and relevant GitHub issues...</p>}
-              {community?.fingerprint === analysis.fingerprint && <CommunityResults result={community} analysis={analysis} />}
+              {community?.fingerprint === analysis.fingerprint && <CommunityResults result={community} analysis={analysis} current={analysisCurrent === true} />}
             </section>
           </> :
           <Card><CardContent className="pt-5 text-sm text-[var(--color-muted-foreground)]">No saved investigation for this instance. Choose a Minecraft crash report or latest.log to begin.</CardContent></Card>}

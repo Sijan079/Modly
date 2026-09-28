@@ -51,6 +51,7 @@ type CheckProgress = {
 export function UpdatesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const linkedPath = searchParams.get("mod");
+  const linkedCrash = searchParams.get("crash");
   const { data: instances = [] } = useInstances();
   const { selectedInstanceId, setSelectedInstance } = useAppStore();
   const instanceId = selectedInstanceId ?? instances[0]?.id ?? null;
@@ -144,12 +145,36 @@ export function UpdatesPage() {
 
   useEffect(() => {
     if (!linkedPath || loadingSavedCheck) return;
+    let cancelled = false;
     const row = rows.find((item) => item.filePath === linkedPath);
     setSearch(row?.fileName ?? linkedPath.split(/[\\/]/).pop() ?? linkedPath);
-    if (row) setActiveRow(row);
-    setLinkedNotice(row ? null : "No saved update result for this mod. Run Check Updates to look for a compatible release.");
-    setSearchParams((params) => { params.delete("mod"); return params; }, { replace: true });
-  }, [linkedPath, loadingSavedCheck, rows, setSearchParams]);
+    const openLinked = async () => {
+      if (linkedCrash) {
+        if (!instanceId) {
+          if (!cancelled) setLinkedNotice("Select the instance from the crash analysis before reviewing an update.");
+          return;
+        }
+        setLinkedNotice("Checking the crash snapshot against the current pack...");
+        try {
+          if (!await api.crash.validate(instanceId, linkedCrash)) {
+            if (!cancelled) setLinkedNotice("The crash snapshot is stale. Analyze the report again before reviewing an update.");
+            return;
+          }
+        } catch {
+          if (!cancelled) setLinkedNotice("Could not verify the crash snapshot. Analyze the report again before reviewing an update.");
+          return;
+        }
+      }
+      if (!cancelled) {
+        if (row) setActiveRow(row);
+        setLinkedNotice(row ? null : "No saved update result for this mod. Run Check Updates to look for a compatible release.");
+      }
+    };
+    void openLinked().finally(() => {
+      if (!cancelled) setSearchParams((params) => { params.delete("mod"); params.delete("crash"); return params; }, { replace: true });
+    });
+    return () => { cancelled = true; };
+  }, [linkedPath, linkedCrash, instanceId, loadingSavedCheck, rows, setSearchParams]);
 
   const handleCheck = async () => {
     if (!instanceId || checkProgress.active) return;

@@ -1,14 +1,13 @@
-use std::path::Path;
+use std::collections::HashMap;
 
 use tauri::command;
 
 use crate::models::community::CommunitySearchResult;
-use crate::services::change_plan::list_backups;
 use crate::services::community::{
     cache_key, client, fresh, rank_issues, resolve_source, search_github, search_query,
-    source_from_saved_mod, MAX_REMOTE_CANDIDATES,
+    source_from_saved_mod, GitHubIssue, MAX_REMOTE_CANDIDATES,
 };
-use crate::services::crash::{fingerprint, read_report};
+use crate::services::crash::snapshot_current;
 use crate::state::with_state;
 
 #[command]
@@ -33,15 +32,10 @@ pub async fn search_crash_community(
             .map_err(|error| error.to_string())?;
         Ok((analysis, instance, saved_mods))
     })?;
-    let source_path = analysis.source_path.clone();
-    let instance_for_check = instance.clone();
+    let instance_for_check = instance.id.clone();
     let key_for_check = fingerprint_key.clone();
     tauri::async_runtime::spawn_blocking(move || with_state(|state| {
-        let report = read_report(Path::new(&source_path)).map_err(|error| error.to_string())?;
-        let backups = list_backups(state, &instance_for_check.id).map_err(|error| error.to_string())?;
-        let current = fingerprint(&report, &source_path, &instance_for_check, &backups)
-            .map_err(|error| error.to_string())?;
-        if current != key_for_check { return Err("The report or pack changed. Analyze it again before searching community issues.".to_string()); }
+        if !snapshot_current(state, &instance_for_check, &key_for_check).map_err(|error| error.to_string())? { return Err("The report or pack changed. Analyze it again before searching community issues.".to_string()); }
         Ok(())
     })).await.map_err(|error| error.to_string())??;
 
@@ -55,6 +49,7 @@ pub async fn search_crash_community(
         warnings: Vec::new(),
     };
     let mut github_unavailable = false;
+    let mut query_results: HashMap<String, Result<Vec<GitHubIssue>, String>> = HashMap::new();
     for candidate in analysis.candidates.iter().take(MAX_REMOTE_CANDIDATES) {
         let saved_mod = saved_mods
             .iter()
@@ -142,6 +137,7 @@ pub async fn search_crash_community(
                     cached.as_ref(),
                     &mut result,
                     &mut github_unavailable,
+                    &mut query_results,
                 )
                 .await?
             }
@@ -162,6 +158,7 @@ pub async fn search_crash_community(
                 None,
                 &mut result,
                 &mut github_unavailable,
+                &mut query_results,
             )
             .await?
         };
@@ -190,9 +187,19 @@ async fn fetch_or_stale(
     stale: Option<&(String, Vec<crate::models::community::CommunityIssue>)>,
     result: &mut CommunitySearchResult,
     github_unavailable: &mut bool,
+    query_results: &mut HashMap<String, Result<Vec<GitHubIssue>, String>>,
 ) -> Result<Vec<crate::models::community::CommunityIssue>, String> {
     result.from_cache = false;
-    match search_github(http, repository, query).await {
+    let lookup = if let Some(cached_request) = query_results.get(query) {
+        cached_request.clone()
+    } else {
+        let fetched = search_github(http, repository, query)
+            .await
+            .map_err(|error| error.to_string());
+        query_results.insert(query.to_string(), fetched.clone());
+        fetched
+    };
+    match lookup {
         Ok(issues) => {
             let reports = rank_issues(issues, candidate, mod_version, analysis);
             with_state(|state| {
@@ -204,7 +211,7 @@ async fn fetch_or_stale(
             Ok(reports)
         }
         Err(error) => {
-            if error.to_string().contains("rate limited or inaccessible") {
+            if error.contains("rate limited or inaccessible") {
                 *github_unavailable = true;
             }
             result

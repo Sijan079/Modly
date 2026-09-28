@@ -25,7 +25,7 @@ struct GitHubSearch {
     items: Vec<GitHubIssue>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct GitHubIssue {
     number: u64,
     title: String,
@@ -40,7 +40,7 @@ pub struct GitHubIssue {
     pull_request: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct GitHubLabel {
     name: String,
 }
@@ -197,7 +197,9 @@ fn exception_name(analysis: &CrashAnalysis) -> Option<&str> {
         .exception_type
         .as_deref()
         .and_then(|value| value.rsplit('.').next())
-        .filter(|value| value.len() >= 5)
+        .filter(|value| value.len() >= 5 && value.len() <= 64)
+        .filter(|value| value.bytes().all(|byte| byte.is_ascii_alphabetic()))
+        .filter(|value| value.ends_with("Exception") || value.ends_with("Error"))
 }
 
 fn distinctive_namespace(analysis: &CrashAnalysis) -> Option<&str> {
@@ -212,9 +214,20 @@ fn distinctive_namespace(analysis: &CrashAnalysis) -> Option<&str> {
         .map(String::as_str)
 }
 
+fn public_version(value: &str) -> Option<&str> {
+    (value.len() >= 3
+        && value.len() <= 20
+        && value.as_bytes().first().is_some_and(u8::is_ascii_digit)
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b'.')
+        && !value.contains(".."))
+    .then_some(value)
+}
+
 pub fn search_query(
     repository: &str,
-    candidate: &CrashCandidate,
+    _candidate: &CrashCandidate,
     mod_version: Option<&str>,
     analysis: &CrashAnalysis,
 ) -> String {
@@ -222,41 +235,32 @@ pub fn search_query(
     if let Some(value) = exception_name(analysis) {
         terms.push(value.to_string());
     }
-    if let Some(value) = distinctive_namespace(analysis) {
-        terms.push(value.to_string());
-    }
-    if let Some(value) =
-        mod_version.filter(|value| value.len() >= 3 && value.len() <= 25 && *value != "unknown")
-    {
-        terms.push(value.to_string());
-    }
-    if let Some(value) = analysis.minecraft_version.as_deref() {
-        terms.push(value.to_string());
-    }
-    if let Some(value) = analysis.loader.as_deref() {
+    if let Some(value) = mod_version.and_then(public_version) {
         terms.push(value.to_string());
     }
     if let Some(value) = analysis
-        .loader_version
+        .minecraft_version
         .as_deref()
-        .filter(|value| value.len() <= 20)
+        .and_then(public_version)
     {
         terms.push(value.to_string());
     }
-    if let Some(other) = analysis
-        .candidates
-        .iter()
-        .find(|item| item.file_path != candidate.file_path)
+    if let Some(value) = analysis
+        .loader
+        .as_deref()
+        .filter(|value| ["fabric", "forge", "neoforge", "quilt"].contains(value))
     {
-        terms.push(other.name.clone());
+        terms.push(value.to_string());
+    }
+    if let Some(value) = analysis.loader_version.as_deref().and_then(public_version) {
+        terms.push(value.to_string());
     }
     if terms.is_empty() {
-        terms.push(candidate.name.clone());
+        terms.push("crash".to_string());
     }
-    terms.truncate(7);
     let terms = terms
         .into_iter()
-        .map(|value| format!("\"{}\"", value.replace('"', "")))
+        .map(|value| format!("\"{value}\""))
         .collect::<Vec<_>>()
         .join(" OR ");
     format!("repo:{repository} is:issue ({terms})")
@@ -273,7 +277,10 @@ pub fn cache_key(fingerprint: &str, file_path: &str, query: &str) -> String {
 pub fn fresh(checked_at: &str, hours: i64) -> bool {
     chrono::DateTime::parse_from_rfc3339(checked_at)
         .ok()
-        .is_some_and(|time| chrono::Utc::now().signed_duration_since(time).num_hours() < hours)
+        .is_some_and(|time| {
+            let age = chrono::Utc::now().signed_duration_since(time).num_seconds();
+            age >= 0 && age < hours * 60 * 60
+        })
 }
 
 pub async fn search_github(
@@ -290,7 +297,15 @@ pub async fn search_github(
     if response.status() == StatusCode::FORBIDDEN
         || response.status() == StatusCode::TOO_MANY_REQUESTS
     {
-        bail!("GitHub search is rate limited or inaccessible for {repository}");
+        let retry = response
+            .headers()
+            .get("retry-after")
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| value.len() <= 20);
+        bail!(
+            "GitHub search is rate limited or inaccessible for {repository}{}",
+            retry.map_or(String::new(), |value| format!("; retry after {value}"))
+        );
     }
     let response: GitHubSearch = response.error_for_status()?.json().await?;
     Ok(response
@@ -308,10 +323,17 @@ pub async fn search_github(
 }
 
 fn contains_signal(text: &str, signal: &str) -> bool {
-    !signal.is_empty()
-        && text
-            .to_ascii_lowercase()
-            .contains(&signal.to_ascii_lowercase())
+    if signal.is_empty() {
+        return false;
+    }
+    let text = text.to_ascii_lowercase();
+    let signal = signal.to_ascii_lowercase();
+    text.match_indices(&signal).any(|(index, _)| {
+        let before = text[..index].chars().last();
+        let after = text[index + signal.len()..].chars().next();
+        before.is_none_or(|value| !value.is_ascii_alphanumeric())
+            && after.is_none_or(|value| !value.is_ascii_alphanumeric())
+    })
 }
 
 fn contains_version(text: &str, version: &str) -> bool {
@@ -363,6 +385,7 @@ pub fn rank_issues(
             let mut similarities = Vec::new();
             let mut differences = Vec::new();
             let mut score = 0;
+            let mut specific_signal = false;
             if let Some(value) =
                 exception_name(analysis).filter(|value| contains_signal(&text, value))
             {
@@ -374,6 +397,7 @@ pub fn rank_issues(
             {
                 similarities.push(format!("Same stack namespace: {value}"));
                 score += 4;
+                specific_signal = true;
             }
             if let Some(value) = mod_version.filter(|value| {
                 value.len() >= 3 && *value != "unknown" && contains_version(&text, value)
@@ -389,9 +413,10 @@ pub fn rank_issues(
                 similarities.push(format!("Same Minecraft version: {value}"));
                 score += 2;
             }
-            if contains_signal(&text, &candidate.name) {
+            if candidate.name.len() >= 4 && contains_signal(&text, &candidate.name) {
                 similarities.push(format!("Mentions {}", candidate.name));
                 score += 1;
+                specific_signal = true;
             }
             for other in analysis
                 .candidates
@@ -413,6 +438,7 @@ pub fn rank_issues(
                     .find(|other| mentions_loader(&text, other))
                 {
                     differences.push(format!("Issue mentions {other}; pack uses {loader}"));
+                    score -= 3;
                 }
             }
             if let Some(expected) = analysis.minecraft_version.as_deref() {
@@ -421,6 +447,7 @@ pub fn rank_issues(
                         differences.push(format!(
                             "Issue mentions Minecraft {found}; pack uses {expected}"
                         ));
+                        score -= 3;
                     }
                 }
             }
@@ -440,7 +467,7 @@ pub fn rank_issues(
                 .any(|label| label.contains("confirmed") || label == "fixed" || label == "resolved")
             {
                 "maintainerLabeled"
-            } else if score >= 3 {
+            } else if specific_signal && score >= 3 {
                 "similar"
             } else {
                 "unverified"
@@ -534,6 +561,41 @@ mod tests {
         );
         assert_eq!(github_repository("http://github.com/acme/mod"), None);
         assert!(safe_https_url("file:///tmp/report").is_none());
+        assert_eq!(
+            github_repository("https://user:secret@github.com/acme/mod"),
+            None
+        );
+        assert_eq!(github_repository("https://github.com:8443/acme/mod"), None);
+        assert_eq!(
+            github_repository("https://github.com/acme%2fother/mod"),
+            None
+        );
+        assert_eq!(
+            github_repository("https://github.com/acme/mod%2fother"),
+            None
+        );
+        assert_eq!(
+            github_repository("https://github.com/acme/mod.evil.test/issues"),
+            Some("acme/mod.evil.test".into())
+        );
+        assert!(safe_https_url("https://user:secret@example.com/issues").is_none());
+    }
+
+    #[test]
+    fn cache_freshness_rejects_expired_future_and_invalid_times() {
+        let now = chrono::Utc::now();
+        assert!(fresh(&now.to_rfc3339(), 6));
+        assert!(!fresh(&(now - chrono::Duration::hours(7)).to_rfc3339(), 6));
+        assert!(!fresh(&(now + chrono::Duration::hours(1)).to_rfc3339(), 6));
+        assert!(!fresh("invalid", 6));
+        assert_ne!(
+            cache_key("one", "mods/a.jar", "query"),
+            cache_key("two", "mods/a.jar", "query")
+        );
+        assert_ne!(
+            cache_key("one", "mods/a.jar", "query"),
+            cache_key("one", "mods/b.jar", "query")
+        );
     }
 
     #[test]
@@ -542,10 +604,10 @@ mod tests {
         let candidate = &analysis.candidates[0];
         let query = search_query("acme/alpha", candidate, Some("1.0.0"), &analysis);
         assert!(query.contains("IllegalStateException"));
-        assert!(query.contains("com.alpha"));
+        assert!(!query.contains("com.alpha"));
         assert!(query.contains("1.20.1"));
         assert!(query.contains("fabric"));
-        assert!(query.contains("Library"));
+        assert!(!query.contains("Library"));
         let issue: GitHubIssue = serde_json::from_value(serde_json::json!({
             "number": 42, "title": "IllegalStateException with Alpha on Minecraft 1.19.4 Forge",
             "html_url": "https://github.com/acme/alpha/issues/42", "state": "closed",
@@ -568,6 +630,23 @@ mod tests {
             .differences
             .iter()
             .any(|item| item.contains("forge")));
+    }
+
+    #[test]
+    fn outbound_query_excludes_paths_names_and_untrusted_values() {
+        let mut analysis = analysis();
+        analysis.exception_type = Some("C:\\Users\\Alice\\secret-token".into());
+        analysis.minecraft_version = Some("1.20.1\" OR token:private".into());
+        analysis.loader_version = Some("C:\\Users\\Alice".into());
+        analysis.stack_namespaces = vec!["com.alice.private_token".into()];
+        analysis.candidates[0].name = "Alice's private mod".into();
+        let query = search_query(
+            "acme/alpha",
+            &analysis.candidates[0],
+            Some("7.1.0 secret"),
+            &analysis,
+        );
+        assert_eq!(query, "repo:acme/alpha is:issue (\"fabric\")");
     }
 
     #[test]
@@ -595,5 +674,42 @@ mod tests {
             result[0].duplicate_of.as_deref(),
             Some("https://github.com/acme/alpha/issues/7")
         );
+    }
+
+    #[test]
+    fn contradictory_reports_rank_below_specific_matches_and_do_not_gain_authority() {
+        let analysis = analysis();
+        let candidate = &analysis.candidates[0];
+        let issue = |number: u64, title: &str, body: &str| {
+            serde_json::from_value::<GitHubIssue>(serde_json::json!({
+            "number": number, "title": title, "html_url": format!("https://github.com/acme/alpha/issues/{number}"),
+            "state": "open", "updated_at": "2026-01-01T00:00:00Z", "body": body, "labels": []
+        })).unwrap()
+        };
+        let results = rank_issues(
+            vec![
+                issue(
+                    1,
+                    "IllegalStateException on Minecraft 1.19.4 Forge",
+                    "unrelated mod",
+                ),
+                issue(
+                    2,
+                    "IllegalStateException in Alpha on Minecraft 1.20.1 Fabric",
+                    "com.alpha 1.0.0",
+                ),
+                issue(3, "Alphabet update", "unrelated"),
+            ],
+            candidate,
+            Some("1.0.0"),
+            &analysis,
+        );
+        assert_eq!(results[0].number, 2);
+        assert_eq!(results[0].authority, "similar");
+        assert!(results.iter().all(|item| item.number != 3));
+        assert!(results
+            .iter()
+            .find(|item| item.number == 1)
+            .is_none_or(|item| item.authority == "unverified"));
     }
 }

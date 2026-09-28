@@ -3,6 +3,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, SystemTime};
 
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
@@ -13,6 +14,7 @@ use crate::models::change_plan::{
 };
 use crate::models::mod_metadata::{ModFile, ModMetadata, ModSuggestion};
 use crate::models::pack_truth::PackTruth;
+use crate::services::database::Database;
 use crate::services::hash_service::hash_file;
 use crate::services::mod_parser::parse_mod_jar_observed;
 use crate::services::pack_truth::{scan_pack_truth, verify_archive};
@@ -29,8 +31,142 @@ struct StoredPlan {
 }
 
 static PLANS: OnceLock<Mutex<HashMap<String, StoredPlan>>> = OnceLock::new();
+static ACTIVE_INSTANCES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+#[cfg(test)]
+static TEST_FAULTS: OnceLock<Mutex<HashMap<String, TestFault>>> = OnceLock::new();
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TestFault {
+    AfterBackup,
+    AfterBackupCollision,
+    AfterInstall,
+    AfterInstallCollision,
+}
 fn plans() -> &'static Mutex<HashMap<String, StoredPlan>> {
     PLANS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn cleanup_stage_dir(dir: &Path, prefix: &str, suffix: &str, age: Duration) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return warnings,
+        Err(error) => {
+            return vec![format!(
+                "Could not inspect stages in {}: {error}",
+                dir.display()
+            )]
+        }
+    };
+    for entry in entries {
+        let Ok(entry) = entry else { continue };
+        let name = entry.file_name();
+        let Some(id) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix(prefix)?.strip_suffix(suffix))
+        else {
+            continue;
+        };
+        if Uuid::parse_str(id).is_err() {
+            continue;
+        }
+        let path = entry.path();
+        let stale = entry.metadata().ok().is_some_and(|metadata| {
+            metadata.is_file()
+                && metadata
+                    .modified()
+                    .ok()
+                    .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+                    .is_some_and(|elapsed| elapsed >= age)
+        });
+        if stale {
+            if let Err(error) = fs::remove_file(&path) {
+                warnings.push(format!(
+                    "Could not remove abandoned stage {}: {error}",
+                    path.display()
+                ));
+            }
+        }
+    }
+    warnings
+}
+
+pub fn cleanup_abandoned_stages(db: &Database) -> Result<Vec<String>> {
+    let mut warnings = cleanup_stage_dir(
+        &std::env::temp_dir(),
+        "modly-change-",
+        ".jar",
+        Duration::from_secs(7 * 24 * 60 * 60),
+    );
+    for instance in db.list_instances()? {
+        warnings.extend(cleanup_stage_dir(
+            &Path::new(&instance.game_dir).join("mods"),
+            ".modly-",
+            ".part",
+            Duration::from_secs(24 * 60 * 60),
+        ));
+    }
+    Ok(warnings)
+}
+
+struct InstanceMutationGuard(String);
+
+impl InstanceMutationGuard {
+    fn acquire(instance_id: &str) -> Result<Self> {
+        let mut active = ACTIVE_INSTANCES
+            .get_or_init(|| Mutex::new(HashSet::new()))
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Mutation lock unavailable"))?;
+        if !active.insert(instance_id.to_string()) {
+            bail!("Another mod change is already running for this instance");
+        }
+        Ok(Self(instance_id.to_string()))
+    }
+}
+
+impl Drop for InstanceMutationGuard {
+    fn drop(&mut self) {
+        if let Ok(mut active) = ACTIVE_INSTANCES
+            .get_or_init(|| Mutex::new(HashSet::new()))
+            .lock()
+        {
+            active.remove(&self.0);
+        }
+    }
+}
+
+fn test_failure(plan: &ChangePlan, after_install: bool) -> Result<()> {
+    #[cfg(test)]
+    {
+        let fault = TEST_FAULTS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Test fault store unavailable"))?
+            .get(&plan.id)
+            .copied();
+        match (fault, after_install) {
+            (Some(TestFault::AfterBackup), false) => bail!("Injected failure after backup"),
+            (Some(TestFault::AfterBackupCollision), false) => {
+                fs::write(
+                    plan.old_file_path.as_deref().context("No old path")?,
+                    b"external file",
+                )?;
+                bail!("Injected failure after backup with external collision");
+            }
+            (Some(TestFault::AfterInstall), true) => bail!("Injected failure after install"),
+            (Some(TestFault::AfterInstallCollision), true) => {
+                fs::write(
+                    plan.new_file_path.as_deref().context("No new path")?,
+                    b"external file",
+                )?;
+                bail!("Injected failure after install with external collision");
+            }
+            _ => {}
+        }
+    }
+    #[cfg(not(test))]
+    let _ = (plan, after_install);
+    Ok(())
 }
 
 fn pack_truth(state: &AppState, instance_id: &str, game_dir: &str) -> Result<PackTruth> {
@@ -344,6 +480,10 @@ fn backup_status(dir: &Path) -> &'static str {
         "applied"
     } else if dir.join("rolled-back").exists() {
         "rolledBack"
+    } else if dir.join("rollback-failed").exists() {
+        "rollbackFailed"
+    } else if dir.join("failed-before-mutation").exists() {
+        "failedBeforeMutation"
     } else {
         "pending"
     }
@@ -429,26 +569,57 @@ fn rollback_files(
             }
         }
     }
+    let mut new_removed = true;
     if new_moved {
         if let Some(new) = plan.new_file_path.as_deref().map(Path::new) {
-            if let Err(error) = fs::remove_file(new) {
+            let changed = match plan.source_sha256.as_deref() {
+                Some(expected) => hash_file(new)
+                    .map(|actual| !actual.eq_ignore_ascii_case(expected))
+                    .unwrap_or(true),
+                None => true,
+            };
+            if changed {
+                new_removed = false;
+                errors.push(format!(
+                    "installed file {} changed before rollback; left it in place",
+                    new.display()
+                ));
+            } else if let Err(error) = fs::remove_file(new) {
+                new_removed = false;
                 errors.push(format!("new file {}: {error}", new.display()));
             }
         }
     }
-    if old_moved {
+    if old_moved && new_removed {
         if let (Some(old), Some(backup)) = (plan.old_file_path.as_deref(), backup_path) {
             if backup.exists() {
-                if let Err(error) = fs::rename(backup, old) {
+                if Path::new(old).exists() {
+                    errors.push(format!(
+                        "old filename is occupied; original remains at {}",
+                        backup.display()
+                    ));
+                } else if let Err(error) = fs::rename(backup, old) {
                     errors.push(format!("old file {}: {error}", old));
                 }
             }
         }
+    } else if old_moved {
+        errors.push(
+            "original remains in backup because the installed file could not be removed"
+                .to_string(),
+        );
     }
     errors
 }
 
 pub fn apply_change(state: &AppState, id: &str) -> Result<ChangeApplyResult> {
+    let instance_id = plans()
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Plan store unavailable"))?
+        .get(id)
+        .map(|stored| stored.plan.instance_id.clone())
+        .context("Change plan expired or was already applied")?;
+    let _guard = InstanceMutationGuard::acquire(&instance_id)?;
     let stored = plans()
         .lock()
         .map_err(|_| anyhow::anyhow!("Plan store unavailable"))?
@@ -457,7 +628,16 @@ pub fn apply_change(state: &AppState, id: &str) -> Result<ChangeApplyResult> {
     let stage = stored.stage_path.clone();
     let result = apply_stored_change(state, stored);
     if let Some(stage) = stage {
-        let _ = fs::remove_file(stage);
+        if let Err(error) = fs::remove_file(&stage) {
+            let _ = state.db.append_log(
+                "warn",
+                &format!(
+                    "Change {id}: could not remove temporary stage {}: {error}",
+                    stage.display()
+                ),
+                Some(&instance_id),
+            );
+        }
     }
     result
 }
@@ -563,6 +743,11 @@ fn apply_stored_change(state: &AppState, stored: StoredPlan) -> Result<ChangeApp
         new_sha256: plan.source_sha256.clone(),
     };
     write_manifest(&backup_dir, &backup)?;
+    let _ = state.db.append_log(
+        "info",
+        &format!("Change {}: applying reviewed {:?} plan", plan.id, plan.kind),
+        Some(&plan.instance_id),
+    );
     let pack_stage = plan.new_file_path.as_ref().map(|_| {
         Path::new(&instance.game_dir)
             .join("mods")
@@ -579,17 +764,26 @@ fn apply_stored_change(state: &AppState, stored: StoredPlan) -> Result<ChangeApp
             copy_to_pack_stage(source, part, hash)?;
             stage_copied = true;
         }
+        if fingerprint(&pack_truth(state, &plan.instance_id, &instance.game_dir)?)?
+            != stored.fingerprint
+        {
+            bail!("Pack changed during staging; review a new plan");
+        }
         if let (Some(old), Some(backup_file)) = (&plan.old_file_path, backup_path) {
             fs::rename(old, backup_file).context("Could not move old JAR into backup")?;
             old_moved = true;
         }
+        test_failure(plan, false)?;
         if let (Some(part), Some(new)) = (&pack_stage, &plan.new_file_path) {
             if Path::new(new).exists() {
                 bail!("Target filename appeared during apply: {new}");
             }
-            fs::rename(part, new).context("Could not install staged JAR")?;
+            fs::hard_link(part, new)
+                .context("Could not install staged JAR without replacing an existing file")?;
             new_moved = true;
+            fs::remove_file(part).context("Could not remove staged link after install")?;
         }
+        test_failure(plan, true)?;
         let after = pack_truth(state, &plan.instance_id, &instance.game_dir)?;
         verify_expected_files(
             &before,
@@ -613,10 +807,47 @@ fn apply_stored_change(state: &AppState, stored: StoredPlan) -> Result<ChangeApp
             old_moved,
             new_moved,
         );
-        if rollback_errors.is_empty() {
-            let _ = mark_backup(&backup_dir, "rolled-back");
-            bail!("Change failed and pack files were restored: {error}");
+        let changed_live_files = old_moved || new_moved;
+        let mut rollback_errors = rollback_errors;
+        if rollback_errors.is_empty() && changed_live_files {
+            match pack_truth(state, &plan.instance_id, &instance.game_dir)
+                .and_then(|after| verify_expected_files(&before, &after, None, None, None))
+            {
+                Ok(()) => {}
+                Err(verification_error) => {
+                    rollback_errors.push(format!("rollback verification: {verification_error}"))
+                }
+            }
         }
+        if rollback_errors.is_empty() {
+            let status = if changed_live_files {
+                "rolled-back"
+            } else {
+                "failed-before-mutation"
+            };
+            mark_backup(&backup_dir, status).with_context(|| {
+                format!(
+                    "Change failed and {status} marker could not be saved; backup ID {}",
+                    plan.id
+                )
+            })?;
+            let _ = state.db.append_log(
+                "warn",
+                &format!("Change {}: {status}: {error}", plan.id),
+                Some(&plan.instance_id),
+            );
+            bail!("Change failed; {status}: {error}. Backup ID: {}", plan.id);
+        }
+        let _ = mark_backup(&backup_dir, "rollback-failed");
+        let _ = state.db.append_log(
+            "error",
+            &format!(
+                "Change {}: rollback failed: {}",
+                plan.id,
+                rollback_errors.join("; ")
+            ),
+            Some(&plan.instance_id),
+        );
         bail!(
             "Change failed: {error}. Rollback incomplete: {}. Backup ID: {}",
             rollback_errors.join("; "),
@@ -643,7 +874,7 @@ fn apply_stored_change(state: &AppState, stored: StoredPlan) -> Result<ChangeApp
     })
 }
 
-pub fn list_backups(state: &AppState, instance_id: &str) -> Result<Vec<ChangeBackup>> {
+pub fn list_change_history(state: &AppState, instance_id: &str) -> Result<Vec<ChangeBackup>> {
     let instance = state
         .db
         .get_instance(instance_id)?
@@ -665,14 +896,24 @@ pub fn list_backups(state: &AppState, instance_id: &str) -> Result<Vec<ChangeBac
             continue;
         }
         let backup = read_backup(&entry.path())?;
-        if backup.instance_id == instance_id
-            && (backup.status == "applied" || backup.status == "pending")
-        {
+        if backup.instance_id == instance_id {
             backups.push(backup);
         }
     }
     backups.sort_by(|a, b| b.created_at.cmp(&a.created_at));
     Ok(backups)
+}
+
+pub fn list_backups(state: &AppState, instance_id: &str) -> Result<Vec<ChangeBackup>> {
+    Ok(list_change_history(state, instance_id)?
+        .into_iter()
+        .filter(|backup| {
+            matches!(
+                backup.status.as_str(),
+                "applied" | "pending" | "rollbackFailed"
+            )
+        })
+        .collect())
 }
 
 pub fn restore_backup(
@@ -681,6 +922,7 @@ pub fn restore_backup(
     backup_id: &str,
 ) -> Result<crate::models::change_plan::ChangeRestoreResult> {
     Uuid::parse_str(backup_id).context("Invalid backup ID")?;
+    let _guard = InstanceMutationGuard::acquire(instance_id)?;
     let instance = state
         .db
         .get_instance(instance_id)?
@@ -690,7 +932,8 @@ pub fn restore_backup(
     if backup.instance_id != instance_id {
         bail!("Backup belongs to another instance");
     }
-    if backup.status != "applied" && backup.status != "pending" {
+    if backup.status != "applied" && backup.status != "pending" && backup.status != "rollbackFailed"
+    {
         bail!("Backup is not restorable");
     }
     let mods_dir = Path::new(&instance.game_dir).join("mods");
@@ -867,11 +1110,15 @@ mod tests {
     use std::fs::{self, File};
     use std::io::{self, Read, Write};
     use std::path::{Path, PathBuf};
+    use std::time::{Duration, SystemTime};
 
     use zip::write::SimpleFileOptions;
     use zip::ZipWriter;
 
-    use super::{apply_change, preview_change, restore_backup};
+    use super::{
+        apply_change, list_change_history, preview_change, restore_backup, InstanceMutationGuard,
+        TestFault, TEST_FAULTS,
+    };
     use crate::models::change_plan::{ChangeKind, ChangeRequest};
     use crate::models::instance::{CreateInstanceInput, LoaderType};
     use crate::services::database::Database;
@@ -1312,5 +1559,219 @@ mod tests {
         assert_eq!(plan.transitive_dependents.len(), 1);
         assert_eq!(plan.transitive_dependents[0].len(), 3);
         assert!(plan.transitive_dependents[0][2].ends_with("extension.jar"));
+    }
+
+    #[test]
+    fn busy_instance_keeps_plan_available_and_duplicate_apply_is_rejected() {
+        let f = Fixture::new();
+        let source = f.root.join("new.jar");
+        f.jar(&source, "newmod", "1.0.0");
+        let plan = preview_change(
+            &f.state,
+            f.request(ChangeKind::Add, None, Some(&source)),
+            None,
+        )
+        .unwrap();
+        let guard = InstanceMutationGuard::acquire(&f.instance_id).unwrap();
+        assert!(apply_change(&f.state, &plan.id)
+            .unwrap_err()
+            .to_string()
+            .contains("already running"));
+        drop(guard);
+        assert!(apply_change(&f.state, &plan.id).unwrap().verified);
+        assert!(apply_change(&f.state, &plan.id)
+            .unwrap_err()
+            .to_string()
+            .contains("already applied"));
+    }
+
+    #[test]
+    fn failure_after_backup_restores_and_verifies_original() {
+        let f = Fixture::new();
+        let old = f.root.join("game/mods/example.jar");
+        f.jar(&old, "example", "1.0.0");
+        let id = f.saved_mod(&old);
+        let original_hash = hash_file(&old).unwrap();
+        let plan = preview_change(
+            &f.state,
+            f.request(ChangeKind::Remove, Some(id), None),
+            None,
+        )
+        .unwrap();
+        TEST_FAULTS
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap()
+            .insert(plan.id.clone(), TestFault::AfterBackup);
+        let error = apply_change(&f.state, &plan.id).unwrap_err().to_string();
+        assert!(error.contains("rolled-back"), "{error}");
+        assert_eq!(hash_file(&old).unwrap(), original_hash);
+        assert_eq!(
+            list_change_history(&f.state, &f.instance_id).unwrap()[0].status,
+            "rolledBack"
+        );
+    }
+
+    #[test]
+    fn failed_rollback_keeps_original_backup_and_reports_recovery_id() {
+        let f = Fixture::new();
+        let old = f.root.join("game/mods/example.jar");
+        f.jar(&old, "example", "1.0.0");
+        let id = f.saved_mod(&old);
+        let original_hash = hash_file(&old).unwrap();
+        let plan = preview_change(
+            &f.state,
+            f.request(ChangeKind::Remove, Some(id), None),
+            None,
+        )
+        .unwrap();
+        TEST_FAULTS
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap()
+            .insert(plan.id.clone(), TestFault::AfterBackupCollision);
+        let error = apply_change(&f.state, &plan.id).unwrap_err().to_string();
+        assert!(
+            error.contains("Rollback incomplete") && error.contains(&plan.id),
+            "{error}"
+        );
+        assert_eq!(fs::read(&old).unwrap(), b"external file");
+        assert_eq!(
+            hash_file(Path::new(plan.backup_path.as_deref().unwrap())).unwrap(),
+            original_hash
+        );
+        assert_eq!(
+            list_change_history(&f.state, &f.instance_id).unwrap()[0].status,
+            "rollbackFailed"
+        );
+    }
+
+    #[test]
+    fn failure_after_install_restores_old_file_and_no_staged_link_remains() {
+        let f = Fixture::new();
+        let old = f.root.join("game/mods/example.jar");
+        f.jar(&old, "example", "1.0.0");
+        let id = f.saved_mod(&old);
+        let original_hash = hash_file(&old).unwrap();
+        let candidate = f.root.join("example.jar");
+        f.jar(&candidate, "example", "2.0.0");
+        let plan = preview_change(
+            &f.state,
+            f.request(ChangeKind::Update, Some(id), Some(&candidate)),
+            None,
+        )
+        .unwrap();
+        TEST_FAULTS
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap()
+            .insert(plan.id.clone(), TestFault::AfterInstall);
+        let error = apply_change(&f.state, &plan.id).unwrap_err().to_string();
+        assert!(error.contains("rolled-back"), "{error}");
+        assert_eq!(hash_file(&old).unwrap(), original_hash);
+        assert!(!f
+            .root
+            .join("game/mods")
+            .join(format!(".modly-{}.part", plan.id))
+            .exists());
+    }
+
+    #[test]
+    fn rollback_preserves_externally_replaced_installed_file_and_original_backup() {
+        let f = Fixture::new();
+        let old = f.root.join("game/mods/example.jar");
+        f.jar(&old, "example", "1.0.0");
+        let id = f.saved_mod(&old);
+        let original_hash = hash_file(&old).unwrap();
+        let candidate = f.root.join("example.jar");
+        f.jar(&candidate, "example", "2.0.0");
+        let plan = preview_change(
+            &f.state,
+            f.request(ChangeKind::Update, Some(id), Some(&candidate)),
+            None,
+        )
+        .unwrap();
+        TEST_FAULTS
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap()
+            .insert(plan.id.clone(), TestFault::AfterInstallCollision);
+        let error = apply_change(&f.state, &plan.id).unwrap_err().to_string();
+        assert!(error.contains("Rollback incomplete") && error.contains(&plan.id));
+        assert_eq!(
+            fs::read(plan.new_file_path.as_deref().unwrap()).unwrap(),
+            b"external file"
+        );
+        assert_eq!(
+            hash_file(Path::new(plan.backup_path.as_deref().unwrap())).unwrap(),
+            original_hash
+        );
+        assert_eq!(
+            list_change_history(&f.state, &f.instance_id).unwrap()[0].status,
+            "rollbackFailed"
+        );
+    }
+
+    #[test]
+    fn deleted_target_and_wrong_source_hash_cannot_apply() {
+        let f = Fixture::new();
+        let old = f.root.join("game/mods/example.jar");
+        f.jar(&old, "example", "1.0.0");
+        let id = f.saved_mod(&old);
+        let plan = preview_change(
+            &f.state,
+            f.request(ChangeKind::Remove, Some(id), None),
+            None,
+        )
+        .unwrap();
+        fs::remove_file(&old).unwrap();
+        assert!(apply_change(&f.state, &plan.id).is_err());
+        assert!(!old.exists());
+        let source = f.root.join("candidate.jar");
+        f.jar(&source, "candidate", "1.0.0");
+        let mut request = f.request(ChangeKind::Add, None, Some(&source));
+        request.expected_sha256 = Some("0".repeat(64));
+        assert!(preview_change(&f.state, request, None)
+            .unwrap_err()
+            .to_string()
+            .contains("expected SHA-256"));
+        assert!(!f.root.join("game/mods/candidate.jar").exists());
+    }
+
+    #[test]
+    fn stage_cleanup_removes_only_old_files_with_modly_plan_names() {
+        let root =
+            std::env::temp_dir().join(format!("modly-stage-cleanup-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let old = root.join(format!(".modly-{}.part", uuid::Uuid::new_v4()));
+        let recent = root.join(format!(".modly-{}.part", uuid::Uuid::new_v4()));
+        let foreign = root.join(".modly-not-a-uuid.part");
+        for path in [&old, &recent, &foreign] {
+            fs::write(path, b"stage").unwrap();
+        }
+        let old_time = std::fs::FileTimes::new()
+            .set_modified(SystemTime::now() - Duration::from_secs(48 * 60 * 60));
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&old)
+            .unwrap()
+            .set_times(old_time)
+            .unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&foreign)
+            .unwrap()
+            .set_times(old_time)
+            .unwrap();
+        assert!(super::cleanup_stage_dir(
+            &root,
+            ".modly-",
+            ".part",
+            Duration::from_secs(24 * 60 * 60)
+        )
+        .is_empty());
+        assert!(!old.exists());
+        assert!(recent.exists() && foreign.exists());
+        fs::remove_dir_all(root).unwrap();
     }
 }
